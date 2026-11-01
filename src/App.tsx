@@ -402,7 +402,7 @@ function LearnView({ categories, cards }) {
   };
 
   return (
-    <div className="flex flex-col min-h-full">
+    <div className="flex flex-col h-full">
       <CategorySelector
         categories={categories}
         activeCategory={activeCategory}
@@ -419,10 +419,10 @@ function LearnView({ categories, cards }) {
         baseTotal={baseTotal}
       />
 
-      <div className="flex-1 flex flex-col justify-between items-center px-5 py-2 pb-4 min-h-0">
+      <div className="flex-1 flex flex-col justify-between items-center px-5 pt-1 pb-3 min-h-0">
         {filteredCards.length > 0 ? (
           <>
-            <div className="w-full flex justify-between items-center text-xs font-medium text-slate-500 mb-2 px-1 shrink-0">
+            <div className="w-full flex justify-between items-center text-xs font-medium text-slate-500 mb-1.5 px-1 shrink-0">
               <span className="truncate max-w-[70%]">
                 {filteredCards[safeIndex].category}{' '}
                 <span className="text-indigo-400 font-mono">#{filteredCards[safeIndex].scopeSeq}</span>
@@ -431,54 +431,58 @@ function LearnView({ categories, cards }) {
             </div>
             
             <div 
-              className="w-full flex-1 min-h-[240px] max-h-[380px] perspective-1000 cursor-pointer group"
+              className="w-full flex-1 min-h-[360px] max-h-[520px] perspective-1000 cursor-pointer group"
               onClick={() => setIsFlipped(!isFlipped)}
             >
               <div className={`relative w-full h-full transform-style-3d transition-transform duration-500 ease-out ${isFlipped ? 'rotate-y-180' : ''}`}>
                 
                 {/* Front */}
-                <div className="absolute inset-0 backface-hidden bg-slate-900 border border-slate-800 rounded-[1.75rem] shadow-xl flex flex-col items-center justify-center p-6 text-center group-hover:border-indigo-500/50 transition-colors">
+                <div className="absolute inset-0 backface-hidden bg-slate-900 border border-slate-800 rounded-[2rem] shadow-xl flex flex-col items-center justify-center p-6 text-center group-hover:border-indigo-500/50 transition-colors">
                   <span className="absolute top-5 left-5 text-xs font-mono font-bold text-slate-500 bg-slate-800/80 px-2.5 py-1 rounded-full">
                     #{filteredCards[safeIndex].scopeSeq}
                   </span>
                   <RotateCcw size={18} className="absolute top-5 right-5 text-slate-600" />
                   <div className="flex flex-col items-center justify-center mb-2">
-                    <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-50 tracking-wide mb-3">{filteredCards[safeIndex].term}</h2>
+                    <h2 className="text-4xl font-extrabold text-slate-50 tracking-wide mb-3">{filteredCards[safeIndex].term}</h2>
                     <button 
                       onClick={(e) => { e.stopPropagation(); playAudio(filteredCards[safeIndex].term); }} 
                       className="p-3 bg-indigo-500/10 text-indigo-400 rounded-full hover:bg-indigo-500/30 transition-colors active:scale-95"
                     >
-                      <Volume2 size={26} />
+                      <Volume2 size={28} />
                     </button>
                   </div>
-                  <p className="text-base text-indigo-300/80 font-mono tracking-wider">{filteredCards[safeIndex].phonetic}</p>
+                  <p className="text-lg text-indigo-300/80 font-mono tracking-wider">{filteredCards[safeIndex].phonetic}</p>
                 </div>
 
                 {/* Back */}
-                <div className="absolute inset-0 backface-hidden rotate-y-180 bg-slate-800 border border-indigo-500/30 rounded-[1.75rem] shadow-xl flex flex-col p-5 overflow-y-auto no-scrollbar">
-                  <div className="mb-3 pb-3 border-b border-slate-700/50">
-                    <div className="flex items-baseline gap-2 mb-1">
-                      <span className="text-xs font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded shrink-0">{filteredCards[safeIndex].pos}</span>
-                      <h3 className="text-lg font-bold text-slate-100">{filteredCards[safeIndex].meaning}</h3>
+                <div className="absolute inset-0 backface-hidden rotate-y-180 bg-slate-800 border border-indigo-500/30 rounded-[2rem] shadow-xl flex flex-col p-6 overflow-y-auto no-scrollbar">
+                  <div className="mb-4 pb-3.5 border-b border-slate-700/60 shrink-0">
+                    <div className="flex items-start gap-2.5">
+                      <span className="text-sm font-bold text-indigo-400 bg-indigo-500/15 px-2.5 py-0.5 rounded shrink-0 mt-0.5">
+                        {filteredCards[safeIndex].pos}
+                      </span>
+                      <h3 className="text-xl font-bold text-slate-100 leading-relaxed break-words">
+                        {filteredCards[safeIndex].meaning}
+                      </h3>
                     </div>
                   </div>
                   
                   {filteredCards[safeIndex].phrases && filteredCards[safeIndex].phrases.length > 0 && (
                     <div className="flex-1">
-                      <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">相關片語</h4>
-                      <div className="space-y-2">
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">相關片語</h4>
+                      <div className="space-y-2.5">
                         {filteredCards[safeIndex].phrases.map((phrase, idx) => (
-                          <div key={idx} className="bg-slate-900/60 rounded-xl p-2.5 border border-slate-700/30">
-                            <div className="flex items-start justify-between gap-2 mb-0.5">
-                              <p className="text-xs font-semibold text-slate-200">{phrase.en}</p>
+                          <div key={idx} className="bg-slate-900/60 rounded-xl p-3 border border-slate-700/40">
+                            <div className="flex items-start justify-between gap-2 mb-1">
+                              <p className="text-sm font-semibold text-slate-100 leading-snug break-words">{phrase.en}</p>
                               <button 
                                 onClick={(e) => { e.stopPropagation(); playAudio(phrase.en); }}
-                                className="text-indigo-400 p-1 bg-indigo-500/10 hover:bg-indigo-500/30 rounded transition-colors shrink-0"
+                                className="text-indigo-400 p-1.5 bg-indigo-500/10 hover:bg-indigo-500/30 rounded-lg transition-colors shrink-0"
                               >
-                                <Volume2 size={14} />
+                                <Volume2 size={16} />
                               </button>
                             </div>
-                            <p className="text-xs text-slate-400">{phrase.ch}</p>
+                            <p className="text-sm text-slate-300 leading-snug break-words">{phrase.ch}</p>
                           </div>
                         ))}
                       </div>
@@ -488,7 +492,7 @@ function LearnView({ categories, cards }) {
               </div>
             </div>
 
-            <div className="w-full flex items-center gap-4 mt-4 shrink-0">
+            <div className="w-full flex items-center gap-4 mt-3 shrink-0">
               <button onClick={handlePrev} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-800 text-slate-300 hover:text-white transition-colors active:scale-95 shrink-0"><ChevronLeft size={24} /></button>
               <button onClick={() => setIsFlipped(!isFlipped)} className="flex-1 py-3.5 rounded-2xl bg-indigo-600/20 text-indigo-400 font-bold active:scale-95 transition-all border border-indigo-500/30 text-sm">
                 {isFlipped ? '看單字' : '看解釋'}
