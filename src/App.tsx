@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { BookOpen, Database, Plus, ChevronLeft, ChevronRight, RotateCcw, Trash2, GraduationCap, BrainCircuit, Check, X, ArrowRight, RotateCw, Volume2, Cloud, LogOut } from 'lucide-react';
+import { BookOpen, Database, Plus, ChevronLeft, ChevronRight, RotateCcw, Trash2, GraduationCap, BrainCircuit, Check, X, ArrowRight, RotateCw, Volume2, Cloud, LogOut, Edit2, Search, Upload, Download, FolderPlus } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, writeBatch } from 'firebase/firestore';
 
 // Firebase initialization (設定來自 .env / GitHub Secrets)
 const firebaseConfig = {
@@ -142,11 +142,20 @@ const INITIAL_CARDS = [
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('learn'); // 'learn', 'quiz', 'admin'
-  const [categories, setCategories] = useState(INITIAL_CATEGORIES);
+  const [customCategories, setCustomCategories] = useState(INITIAL_CATEGORIES);
   const [cards, setCards] = useState([]);
   const [user, setUser] = useState(null);
   const [isSyncing, setIsSyncing] = useState(true);
   const [authReady, setAuthReady] = useState(false);
+
+  // 自動整合預設分類、自訂分類與雲端單字卡中的所有分類
+  const categories = useMemo(() => {
+    const set = new Set([...customCategories]);
+    cards.forEach(c => {
+      if (c.category && c.category.trim()) set.add(c.category.trim());
+    });
+    return Array.from(set);
+  }, [cards, customCategories]);
 
   // 1. Auth Setup (Google)
   useEffect(() => {
@@ -257,7 +266,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto pb-24 bg-slate-950">
           {activeTab === 'learn' && <LearnView categories={categories} cards={cards} />}
           {activeTab === 'quiz' && <QuizView categories={categories} cards={cards} updateCardMastery={updateCardMastery} resetProgress={resetProgress} />}
-          {activeTab === 'admin' && <AdminView categories={categories} setCategories={setCategories} cards={cards} user={user} />}
+          {activeTab === 'admin' && <AdminView categories={categories} setCategories={setCustomCategories} cards={cards} user={user} />}
         </main>
 
         <nav className="absolute bottom-0 w-full bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 pb-safe pt-2 px-4 pb-6 flex justify-around items-center z-20">
@@ -750,36 +759,89 @@ function EmptyState({ isMistakeTab }) {
 // --- ADMIN VIEW COMPONENTS ---
 
 function AdminView({ categories, setCategories, cards, user }) {
+  const [adminSubTab, setAdminSubTab] = useState('single'); // 'single' | 'batch' | 'categories'
+  const [editingId, setEditingId] = useState(null);
+
+  // Single Card Form State
   const [newTerm, setNewTerm] = useState('');
   const [newMeaning, setNewMeaning] = useState('');
   const [newPhonetic, setNewPhonetic] = useState('');
   const [newPos, setNewPos] = useState('n.');
-  const [selectedCat, setSelectedCat] = useState(categories[0] || '');
+  const [selectedCat, setSelectedCat] = useState(categories[0] || '大考 1680 Unit 1');
+  const [phrases, setPhrases] = useState([{ en: '', ch: '' }]);
 
-  const handleAddCard = async (e) => {
+  // Category Management State
+  const [newCatName, setNewCatName] = useState('');
+  const [renameCatFrom, setRenameCatFrom] = useState(categories[0] || '');
+  const [renameCatTo, setRenameCatTo] = useState('');
+
+  // Batch Import State
+  const [batchCategory, setBatchCategory] = useState(categories[0] || '大考 1680 Unit 1');
+  const [batchText, setBatchText] = useState('');
+  const [batchStatus, setBatchStatus] = useState('');
+
+  // Filter & Search State for List
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterCat, setFilterCat] = useState('All');
+
+  useEffect(() => {
+    if (!selectedCat && categories.length > 0) setSelectedCat(categories[0]);
+    if (!batchCategory && categories.length > 0) setBatchCategory(categories[0]);
+    if (!renameCatFrom && categories.length > 0) setRenameCatFrom(categories[0]);
+  }, [categories, selectedCat, batchCategory, renameCatFrom]);
+
+  const resetForm = () => {
+    setEditingId(null);
+    setNewTerm('');
+    setNewMeaning('');
+    setNewPhonetic('');
+    setNewPos('n.');
+    setPhrases([{ en: '', ch: '' }]);
+  };
+
+  const handleEditClick = (card) => {
+    setAdminSubTab('single');
+    setEditingId(card.id.toString());
+    setNewTerm(card.term || '');
+    setNewMeaning(card.meaning || '');
+    setNewPhonetic(card.phonetic === '[]' ? '' : (card.phonetic || ''));
+    setNewPos(card.pos || 'n.');
+    setSelectedCat(card.category || categories[0] || '大考 1680 Unit 1');
+    setPhrases(
+      card.phrases && card.phrases.length > 0
+        ? card.phrases.map(p => ({ en: p.en || '', ch: p.ch || '' }))
+        : [{ en: '', ch: '' }]
+    );
+  };
+
+  const handleSaveCard = async (e) => {
     e.preventDefault();
-    if (newTerm.trim() && newMeaning.trim() && selectedCat && user) {
-      const newId = Date.now().toString();
-      const newCard = {
-        id: newId,
-        term: newTerm.trim(),
-        meaning: newMeaning.trim(),
-        phonetic: newPhonetic.trim() || '[]',
-        pos: newPos,
-        phrases: [], // simplified for manual entry, can be expanded
-        category: selectedCat,
-        mastery: 0,
-        mistake: false
-      };
-      
-      try {
-        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'cards', newId), newCard);
-        setNewTerm('');
-        setNewMeaning('');
-        setNewPhonetic('');
-      } catch(error) {
-        console.error("Error adding card: ", error);
-      }
+    if (!newTerm.trim() || !newMeaning.trim() || !selectedCat || !user) return;
+
+    const cleanPhrases = phrases
+      .map(p => ({ en: p.en.trim(), ch: p.ch.trim() }))
+      .filter(p => p.en && p.ch);
+
+    const cardId = editingId ? editingId.toString() : Date.now().toString();
+    const existingCard = editingId ? cards.find(c => c.id.toString() === cardId) : null;
+
+    const cardData = {
+      id: cardId,
+      term: newTerm.trim(),
+      meaning: newMeaning.trim(),
+      phonetic: newPhonetic.trim() || '[]',
+      pos: newPos.trim() || 'n.',
+      phrases: cleanPhrases,
+      category: selectedCat.trim(),
+      mastery: existingCard ? existingCard.mastery : 0,
+      mistake: existingCard ? existingCard.mistake : false,
+    };
+
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'cards', cardId), cardData);
+      resetForm();
+    } catch (error) {
+      console.error('Error saving card: ', error);
     }
   };
 
@@ -787,82 +849,519 @@ function AdminView({ categories, setCategories, cards, user }) {
     if (!user) return;
     try {
       await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'cards', id.toString()));
-    } catch(error) {
-      console.error("Error deleting card: ", error);
+      if (editingId === id.toString()) resetForm();
+    } catch (error) {
+      console.error('Error deleting card: ', error);
     }
   };
 
+  // 新增分類
+  const handleAddCategory = (e) => {
+    e.preventDefault();
+    const trimmed = newCatName.trim();
+    if (!trimmed) return;
+    setCategories(prev => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+    setSelectedCat(trimmed);
+    setBatchCategory(trimmed);
+    setNewCatName('');
+  };
+
+  // 重新命名整個分類（同步更新雲端該分類所有單字）
+  const handleRenameCategory = async (e) => {
+    e.preventDefault();
+    const targetName = renameCatTo.trim();
+    if (!user || !renameCatFrom || !targetName || renameCatFrom === targetName) return;
+
+    const affected = cards.filter(c => c.category === renameCatFrom);
+    try {
+      const batch = writeBatch(db);
+      affected.forEach(c => {
+        const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+        batch.update(ref, { category: targetName });
+      });
+      await batch.commit();
+      setCategories(prev => prev.map(cat => (cat === renameCatFrom ? targetName : cat)));
+      setRenameCatFrom(targetName);
+      setRenameCatTo('');
+    } catch (err) {
+      console.error('Rename category failed:', err);
+    }
+  };
+
+  // 批次匯入處理（支援 JSON 陣列 或 每行「單字 | 音標 | 詞性 | 解釋 | 片語英=片語中;片語2英=片語2中」）
+  const handleBatchImport = async () => {
+    if (!user || !batchText.trim()) return;
+    setBatchStatus('處理中...');
+    const raw = batchText.trim();
+    let parsedCards = [];
+
+    try {
+      if (raw.startsWith('[') || raw.startsWith('{')) {
+        const json = JSON.parse(raw);
+        const arr = Array.isArray(json) ? json : [json];
+        parsedCards = arr
+          .filter(item => item && item.term && item.meaning)
+          .map((item, idx) => ({
+            id: item.id ? item.id.toString() : `${Date.now()}_${idx}`,
+            term: String(item.term).trim(),
+            phonetic: item.phonetic ? String(item.phonetic).trim() : '[]',
+            pos: item.pos ? String(item.pos).trim() : 'n.',
+            meaning: String(item.meaning).trim(),
+            category: item.category ? String(item.category).trim() : batchCategory,
+            phrases: Array.isArray(item.phrases)
+              ? item.phrases
+                  .map(p => ({ en: String(p.en || '').trim(), ch: String(p.ch || '').trim() }))
+                  .filter(p => p.en && p.ch)
+              : [],
+            mastery: typeof item.mastery === 'number' ? item.mastery : 0,
+            mistake: Boolean(item.mistake),
+          }));
+      } else {
+        const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        lines.forEach((line, idx) => {
+          // 支援 | 或 Tab 分隔
+          const parts = (line.includes('|') ? line.split('|') : line.split('\t')).map(s => s.trim());
+          if (parts.length < 2) return;
+
+          let term = '', phonetic = '[]', pos = 'n.', meaning = '', phraseRaw = '';
+          if (parts.length === 2) {
+            [term, meaning] = parts;
+          } else if (parts.length === 3) {
+            [term, pos, meaning] = parts;
+          } else {
+            [term, phonetic, pos, meaning, phraseRaw = ''] = parts;
+          }
+
+          const parsedPhrases = phraseRaw
+            ? phraseRaw
+                .split(';')
+                .map(pair => {
+                  const [en, ch] = pair.split('=').map(s => (s || '').trim());
+                  return en && ch ? { en, ch } : null;
+                })
+                .filter(Boolean)
+            : [];
+
+          if (term && meaning) {
+            parsedCards.push({
+              id: `${Date.now()}_${idx}`,
+              term,
+              phonetic: phonetic || '[]',
+              pos: pos || 'n.',
+              meaning,
+              category: batchCategory,
+              phrases: parsedPhrases,
+              mastery: 0,
+              mistake: false,
+            });
+          }
+        });
+      }
+
+      if (parsedCards.length === 0) {
+        setBatchStatus('❌ 解析不到有效單字，請檢查格式');
+        return;
+      }
+
+      // Firestore batch 上限 500 筆，分批寫入
+      for (let i = 0; i < parsedCards.length; i += 400) {
+        const chunk = parsedCards.slice(i, i + 400);
+        const batch = writeBatch(db);
+        chunk.forEach(c => {
+          const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+          batch.set(ref, c);
+        });
+        await batch.commit();
+      }
+
+      setBatchText('');
+      setBatchStatus(`✅ 成功匯入 ${parsedCards.length} 個單字！`);
+      setTimeout(() => setBatchStatus(''), 4000);
+    } catch (err) {
+      console.error(err);
+      setBatchStatus('❌ 匯入失敗：格式有誤 (' + err.message + ')');
+    }
+  };
+
+  // 匯出 JSON 備份檔
+  const handleExportJSON = () => {
+    const dataStr = JSON.stringify(cards, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vocab-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const filteredList = useMemo(() => {
+    return cards.filter(c => {
+      const matchCat = filterCat === 'All' || c.category === filterCat;
+      if (!matchCat) return false;
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      const inTerm = (c.term || '').toLowerCase().includes(q);
+      const inMeaning = (c.meaning || '').toLowerCase().includes(q);
+      const inPhrases = (c.phrases || []).some(
+        p => (p.en || '').toLowerCase().includes(q) || (p.ch || '').toLowerCase().includes(q)
+      );
+      return inTerm || inMeaning || inPhrases;
+    });
+  }, [cards, filterCat, searchQuery]);
+
   return (
     <div className="p-6 space-y-6">
-      
-      <section className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg">
-        <h2 className="text-base font-bold text-slate-200 mb-4 flex items-center gap-2">
-          <Plus size={18} className="text-indigo-400" /> 快速新增單字
-        </h2>
-        
-        <form onSubmit={handleAddCard} className="space-y-3">
-          <div className="flex gap-3">
-            <input 
-              type="text" value={newTerm} onChange={e => setNewTerm(e.target.value)}
-              placeholder="單字 (ex: apple)" required
-              className="w-1/2 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
-            />
-            <input 
-              type="text" value={newPhonetic} onChange={e => setNewPhonetic(e.target.value)}
-              placeholder="音標 (ex: [æpl])"
-              className="w-1/2 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
-            />
-          </div>
-          
-          <div className="flex gap-3">
-            <select 
-              value={newPos} onChange={e => setNewPos(e.target.value)}
-              className="w-1/3 bg-slate-950 border border-slate-800 rounded-xl px-3 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none appearance-none"
-            >
-              {['n.', 'v.', 'vt.', 'vi.', 'a.', 'adv.', 'prep.', 'conj.'].map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-            <input 
-              type="text" value={newMeaning} onChange={e => setNewMeaning(e.target.value)}
-              placeholder="中文解釋" required
-              className="w-2/3 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
-            />
-          </div>
-
-          <select 
-            value={selectedCat} onChange={e => setSelectedCat(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none appearance-none"
+      {/* 頂部功能切換 */}
+      <div className="grid grid-cols-3 gap-2 bg-slate-900 p-1.5 rounded-2xl border border-slate-800">
+        {[
+          { id: 'single', label: editingId ? '✏️ 編輯中' : '➕ 單筆管理' },
+          { id: 'batch', label: '📥 批次匯入' },
+          { id: 'categories', label: '📁 分類整理' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setAdminSubTab(tab.id)}
+            className={`py-2 rounded-xl text-xs font-bold transition-all ${
+              adminSubTab === tab.id
+                ? 'bg-indigo-600 text-white shadow'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
           >
-            {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-          </select>
-
-          <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl transition-all active:scale-[0.98]">
-            新增至資料庫
+            {tab.label}
           </button>
-        </form>
-      </section>
+        ))}
+      </div>
 
-      <section>
-        <div className="flex justify-between items-center mb-3 ml-1">
-          <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">資料庫內容 ({cards.length})</h2>
-        </div>
-        <div className="space-y-3">
-          {cards.map(card => (
-            <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between gap-3 group">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <h3 className="font-bold text-slate-200 truncate">{card.term}</h3>
-                  <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 whitespace-nowrap">{card.category}</span>
-                </div>
-                <p className="text-xs text-slate-500 truncate">{card.meaning}</p>
+      {/* 1. 單筆新增 / 編輯 */}
+      {adminSubTab === 'single' && (
+        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-bold text-slate-200 flex items-center gap-2">
+              {editingId ? <Edit2 size={18} className="text-amber-400" /> : <Plus size={18} className="text-indigo-400" />}
+              {editingId ? '編輯單字卡' : '新增單字卡'}
+            </h2>
+            {editingId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="text-xs text-slate-400 hover:text-slate-200 px-2.5 py-1 rounded-lg bg-slate-800"
+              >
+                取消編輯
+              </button>
+            )}
+          </div>
+
+          <form onSubmit={handleSaveCard} className="space-y-3">
+            <div className="flex gap-3">
+              <input
+                type="text"
+                value={newTerm}
+                onChange={e => setNewTerm(e.target.value)}
+                placeholder="單字 (ex: ability)"
+                required
+                className="w-1/2 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+              />
+              <input
+                type="text"
+                value={newPhonetic}
+                onChange={e => setNewPhonetic(e.target.value)}
+                placeholder="音標 (ex: [əˋbɪlətɪ])"
+                className="w-1/2 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <input
+                type="text"
+                list="pos-options"
+                value={newPos}
+                onChange={e => setNewPos(e.target.value)}
+                placeholder="詞性 (n. / vt.)"
+                className="w-1/3 bg-slate-950 border border-slate-800 rounded-xl px-3 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+              />
+              <datalist id="pos-options">
+                {['n.', 'v.', 'vt.', 'vi.', 'a.', 'adv.', 'prep.', 'conj.', 'vt. / n.'].map(p => (
+                  <option key={p} value={p} />
+                ))}
+              </datalist>
+              <input
+                type="text"
+                value={newMeaning}
+                onChange={e => setNewMeaning(e.target.value)}
+                placeholder="中文解釋"
+                required
+                className="w-2/3 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+
+            <select
+              value={selectedCat}
+              onChange={e => setSelectedCat(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+            >
+              {categories.map(cat => (
+                <option key={cat} value={cat}>
+                  📂 {cat}
+                </option>
+              ))}
+            </select>
+
+            {/* 相關片語編輯區 */}
+            <div className="pt-2 border-t border-slate-800/80 space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-bold text-slate-400">相關片語 / 例句（選填，可考片語測驗）</span>
+                <button
+                  type="button"
+                  onClick={() => setPhrases([...phrases, { en: '', ch: '' }])}
+                  className="text-xs font-bold text-indigo-400 hover:text-indigo-300"
+                >
+                  + 新增一組片語
+                </button>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {/* Visual indicator of mastery */}
-                <div className="flex gap-1 mr-2">
+              {phrases.map((p, idx) => (
+                <div key={idx} className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={p.en}
+                    onChange={e => {
+                      const next = [...phrases];
+                      next[idx].en = e.target.value;
+                      setPhrases(next);
+                    }}
+                    placeholder="英文片語 (ex: have the ability to V)"
+                    className="w-1/2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={p.ch}
+                    onChange={e => {
+                      const next = [...phrases];
+                      next[idx].ch = e.target.value;
+                      setPhrases(next);
+                    }}
+                    placeholder="中文解釋 (ex: 有做…的能力)"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+                  />
+                  {phrases.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setPhrases(phrases.filter((_, i) => i !== idx))}
+                      className="p-1.5 text-slate-500 hover:text-red-400"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="submit"
+              className={`w-full font-bold py-3.5 rounded-xl transition-all active:scale-[0.98] text-white ${
+                editingId ? 'bg-amber-600 hover:bg-amber-500' : 'bg-indigo-600 hover:bg-indigo-500'
+              }`}
+            >
+              {editingId ? '儲存修改' : '新增至資料庫'}
+            </button>
+          </form>
+        </section>
+      )}
+
+      {/* 2. 批次匯入 & 備份匯出 */}
+      {adminSubTab === 'batch' && (
+        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-bold text-slate-200 flex items-center gap-2">
+              <Upload size={18} className="text-indigo-400" /> 批次匯入單字
+            </h2>
+            <button
+              type="button"
+              onClick={handleExportJSON}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-cyan-400 border border-slate-700"
+            >
+              <Download size={14} /> 匯出備份 (.json)
+            </button>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-bold text-slate-400">匯入至目標分類</label>
+            <select
+              value={batchCategory}
+              onChange={e => setBatchCategory(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+            >
+              {categories.map(cat => (
+                <option key={cat} value={cat}>
+                  📂 {cat}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3 text-[11px] text-slate-400 space-y-1 leading-relaxed">
+            <p className="font-bold text-slate-300">💡 支援 2 種格式直接貼上：</p>
+            <p>1. <span className="text-indigo-400 font-semibold">文字格式（一行一字）</span>：<code className="text-slate-300">單字 | 音標 | 詞性 | 中文 | 片語英=片語中;片語2英=片語2中</code>（也支援只寫 <code className="text-slate-300">單字 | 中文</code>）</p>
+            <p>2. <span className="text-cyan-400 font-semibold">JSON 陣列格式</span>：把課本拍照丟給 AI 轉換的 JSON 直接貼上即可。</p>
+          </div>
+
+          <textarea
+            rows={6}
+            value={batchText}
+            onChange={e => setBatchText(e.target.value)}
+            placeholder={`範例：\nabandon | [əˋbændən] | vt. | 放棄；遺棄 | abandon oneself to=沉溺於...\nbenefit | [ˋbɛnəfɪt] | n./vt. | 利益；使受益 | benefit from=從…獲益;for the benefit of=為了…的利益`}
+            className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3.5 text-xs font-mono text-slate-200 focus:border-indigo-500 focus:outline-none"
+          />
+
+          {batchStatus && (
+            <p className="text-xs font-bold text-center text-indigo-300">{batchStatus}</p>
+          )}
+
+          <button
+            type="button"
+            onClick={handleBatchImport}
+            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl transition-all active:scale-[0.98]"
+          >
+            一鍵寫入雲端資料庫
+          </button>
+        </section>
+      )}
+
+      {/* 3. 分類新增與改名管理 */}
+      {adminSubTab === 'categories' && (
+        <section className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-5">
+          <div>
+            <h2 className="text-base font-bold text-slate-200 mb-3 flex items-center gap-2">
+              <FolderPlus size={18} className="text-indigo-400" /> 新增單元 / 分類
+            </h2>
+            <form onSubmit={handleAddCategory} className="flex gap-2">
+              <input
+                type="text"
+                value={newCatName}
+                onChange={e => setNewCatName(e.target.value)}
+                placeholder="例如：大考 1680 Unit 2"
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+              />
+              <button
+                type="submit"
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shrink-0"
+              >
+                新增分類
+              </button>
+            </form>
+          </div>
+
+          <div className="pt-4 border-t border-slate-800">
+            <h3 className="text-xs font-bold text-slate-400 mb-2">重新命名分類（會自動搬移該分類下所有單字）</h3>
+            <form onSubmit={handleRenameCategory} className="space-y-2">
+              <select
+                value={renameCatFrom}
+                onChange={e => setRenameCatFrom(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200"
+              >
+                {categories.map(cat => (
+                  <option key={cat} value={cat}>
+                    原名稱：{cat} ({cards.filter(c => c.category === cat).length} 字)
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={renameCatTo}
+                  onChange={e => setRenameCatTo(e.target.value)}
+                  placeholder="輸入新分類名稱..."
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 shrink-0"
+                >
+                  確認改名
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+      )}
+
+      {/* 單字庫列表（含搜尋與分類篩選） */}
+      <section className="space-y-3">
+        <div className="flex justify-between items-center ml-1">
+          <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+            資料庫內容 ({filteredList.length} / {cards.length})
+          </h2>
+        </div>
+
+        {/* 搜尋與分類過濾列 */}
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="搜尋單字、中文或片語..."
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+            />
+          </div>
+          <select
+            value={filterCat}
+            onChange={e => setFilterCat(e.target.value)}
+            className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-300 focus:border-indigo-500 focus:outline-none max-w-[140px]"
+          >
+            <option value="All">全部分類</option>
+            {categories.map(cat => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-2.5">
+          {filteredList.map(card => (
+            <div
+              key={card.id}
+              className={`bg-slate-900 border rounded-2xl p-4 flex items-center justify-between gap-3 transition-colors ${
+                editingId === card.id.toString() ? 'border-amber-500/60' : 'border-slate-800'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                  <h3 className="font-bold text-slate-200 truncate">{card.term}</h3>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400">
+                    {card.pos}
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400 whitespace-nowrap">
+                    {card.category}
+                  </span>
+                  {card.phrases && card.phrases.length > 0 && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400">
+                      片語×{card.phrases.length}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-400 truncate">{card.meaning}</p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex gap-1 mr-1" title={`熟練度 ${card.mastery}/2`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${card.mastery > 0 ? 'bg-green-500' : 'bg-slate-700'}`} />
                   <div className={`w-1.5 h-1.5 rounded-full ${card.mastery > 1 ? 'bg-green-500' : 'bg-slate-700'}`} />
                 </div>
-                <button onClick={() => handleDeleteCard(card.id)} className="p-2 text-slate-500 hover:text-red-400 bg-slate-800 rounded-xl transition-colors">
-                  <Trash2 size={16} />
+                <button
+                  onClick={() => handleEditClick(card)}
+                  title="編輯單字"
+                  className="p-2 text-slate-400 hover:text-amber-400 bg-slate-800 rounded-xl transition-colors"
+                >
+                  <Edit2 size={15} />
+                </button>
+                <button
+                  onClick={() => handleDeleteCard(card.id)}
+                  title="刪除單字"
+                  className="p-2 text-slate-500 hover:text-red-400 bg-slate-800 rounded-xl transition-colors"
+                >
+                  <Trash2 size={15} />
                 </button>
               </div>
             </div>
