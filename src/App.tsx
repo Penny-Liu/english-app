@@ -514,6 +514,7 @@ export default function App() {
               touchCategory={touchCategory}
               cards={cards}
               user={user}
+              activeCategory={activeCategory}
             />
           )}
         </main>
@@ -1412,9 +1413,96 @@ function EmptyState({ isMistakeTab }) {
   );
 }
 
+// 科目選擇器：預設帶入「目前常用科目」，點擊可展開所有科目重新選擇，並清楚標示將寫入哪個科目
+function CategoryPicker({ label, value, onChange, categories, cards, defaultCat }) {
+  const [open, setOpen] = useState(false);
+  const countOf = cat => cards.filter(c => c.category === cat).length;
+  const isDifferent = defaultCat && value && value !== defaultCat;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-slate-400">{label}</span>
+        {isDifferent && (
+          <button
+            type="button"
+            onClick={() => onChange(defaultCat)}
+            className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300"
+          >
+            ↩ 改回目前科目「{defaultCat}」
+          </button>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl border text-left transition-all ${
+          isDifferent
+            ? 'bg-amber-500/10 border-amber-500/50'
+            : 'bg-indigo-500/10 border-indigo-500/40'
+        }`}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="text-base">📂</span>
+          <span className="min-w-0">
+            <span className="block text-sm font-bold text-slate-100 truncate">{value || '請選擇科目'}</span>
+            <span className="block text-[11px] text-slate-400">
+              目前 {value ? countOf(value) : 0} 字
+              {value && value === defaultCat ? ' ・ 目前常用科目' : isDifferent ? ' ・ ⚠️ 非目前常用科目' : ''}
+            </span>
+          </span>
+        </span>
+        <span className="shrink-0 text-xs font-bold text-slate-300 bg-slate-800 px-2.5 py-1 rounded-lg">
+          {open ? '收合 ▴' : '更換 ▾'}
+        </span>
+      </button>
+
+      {open && (
+        <div className="bg-slate-950 border border-slate-800 rounded-xl p-2 max-h-52 overflow-y-auto space-y-1">
+          {categories.map((cat, idx) => {
+            const selected = cat === value;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => {
+                  onChange(cat);
+                  setOpen(false);
+                }}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-left text-xs transition-all ${
+                  selected
+                    ? 'bg-indigo-500 text-white font-bold'
+                    : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <span className="truncate">
+                  {selected ? '✓ ' : ''}
+                  {cat}
+                  {idx === 0 && !selected ? <span className="ml-1.5 text-[10px] text-cyan-400">最近使用</span> : null}
+                </span>
+                <span className={`shrink-0 font-mono ${selected ? 'text-indigo-100' : 'text-slate-500'}`}>
+                  {countOf(cat)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- ADMIN VIEW COMPONENTS ---
 
-function AdminView({ categories, setCategories, touchCategory, cards, user }) {
+function AdminView({ categories, setCategories, touchCategory, cards, user, activeCategory }) {
+  // 預設科目：優先使用目前複習/測驗中的科目，其次才是最近使用的第 1 個科目
+  const defaultCat =
+    activeCategory && categories.includes(activeCategory)
+      ? activeCategory
+      : categories[0] || '';
+  const otherThanDefault = categories.find(c => c !== defaultCat) || defaultCat;
+
   const [adminSubTab, setAdminSubTab] = useState('single'); // 'single' | 'batch' | 'categories'
   const [editingId, setEditingId] = useState(null);
 
@@ -1423,44 +1511,61 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
   const [newMeaning, setNewMeaning] = useState('');
   const [newPhonetic, setNewPhonetic] = useState('');
   const [newPos, setNewPos] = useState('n.');
-  const [selectedCat, setSelectedCat] = useState(categories[0] || '大考 1680 Unit 1');
+  const [selectedCat, setSelectedCat] = useState(defaultCat);
   const [phrases, setPhrases] = useState([{ en: '', ch: '' }]);
 
   // Category Management State
   const [newCatName, setNewCatName] = useState('');
-  const [renameCatFrom, setRenameCatFrom] = useState(categories[0] || '');
+  const [renameCatFrom, setRenameCatFrom] = useState(defaultCat);
   const [renameCatTo, setRenameCatTo] = useState('');
-  const [mergeSourceCat, setMergeSourceCat] = useState(categories[0] || '');
-  const [mergeTargetCat, setMergeTargetCat] = useState(categories[1] || categories[0] || '');
-  const [splitSourceCat, setSplitSourceCat] = useState(categories[0] || '');
+  const [mergeSourceCat, setMergeSourceCat] = useState(defaultCat);
+  const [mergeTargetCat, setMergeTargetCat] = useState(otherThanDefault);
+  const [splitSourceCat, setSplitSourceCat] = useState(defaultCat);
   const [splitMode, setSplitMode] = useState('range'); // 'range' | 'chunk'
   const [splitStartSeq, setSplitStartSeq] = useState('21');
   const [splitEndSeq, setSplitEndSeq] = useState('40');
   const [splitTargetCat, setSplitTargetCat] = useState('');
   const [splitChunkSize, setSplitChunkSize] = useState('20');
-  const [deleteCatTarget, setDeleteCatTarget] = useState(categories[0] || '');
+  // 刪除科目是危險操作：不預設任何科目，必須使用者明確選擇
+  const [deleteCatTarget, setDeleteCatTarget] = useState('');
   const [confirmDeleteCat, setConfirmDeleteCat] = useState(false);
   const [catOpStatus, setCatOpStatus] = useState('');
 
   // Batch Import State
-  const [batchCategory, setBatchCategory] = useState(categories[0] || '大考 1680 Unit 1');
+  const [batchCategory, setBatchCategory] = useState(defaultCat);
   const [batchText, setBatchText] = useState('');
   const [batchStatus, setBatchStatus] = useState('');
   const [duplicateStrategy, setDuplicateStrategy] = useState('merge'); // 'merge' | 'skip' | 'overwrite'
 
   // Filter & Search State for List
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterCat, setFilterCat] = useState('All');
+  const [filterCat, setFilterCat] = useState(defaultCat || 'All');
 
+  // 當「目前常用科目」改變（例如在複習頁切換科目）時，同步更新管理頁各處的預設值
   useEffect(() => {
-    if (!selectedCat && categories.length > 0) setSelectedCat(categories[0]);
-    if (!batchCategory && categories.length > 0) setBatchCategory(categories[0]);
-    if (!renameCatFrom && categories.length > 0) setRenameCatFrom(categories[0]);
-    if (!mergeSourceCat && categories.length > 0) setMergeSourceCat(categories[0]);
-    if (!mergeTargetCat && categories.length > 0) setMergeTargetCat(categories[1] || categories[0]);
-    if (!splitSourceCat && categories.length > 0) setSplitSourceCat(categories[0]);
-    if (!deleteCatTarget && categories.length > 0) setDeleteCatTarget(categories[0]);
-  }, [categories, selectedCat, batchCategory, renameCatFrom, mergeSourceCat, mergeTargetCat, splitSourceCat, deleteCatTarget]);
+    if (!defaultCat) return;
+    if (!editingId) setSelectedCat(defaultCat);
+    setBatchCategory(defaultCat);
+    setRenameCatFrom(defaultCat);
+    setMergeSourceCat(defaultCat);
+    setMergeTargetCat(prev => (prev && prev !== defaultCat && categories.includes(prev) ? prev : otherThanDefault));
+    setSplitSourceCat(defaultCat);
+    setFilterCat(defaultCat);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultCat]);
+
+  // 若目前選取的科目已被刪除/改名，退回預設科目
+  useEffect(() => {
+    if (selectedCat && !categories.includes(selectedCat) && !editingId) setSelectedCat(defaultCat);
+    if (batchCategory && !categories.includes(batchCategory)) setBatchCategory(defaultCat);
+    if (renameCatFrom && !categories.includes(renameCatFrom)) setRenameCatFrom(defaultCat);
+    if (mergeSourceCat && !categories.includes(mergeSourceCat)) setMergeSourceCat(defaultCat);
+    if (mergeTargetCat && !categories.includes(mergeTargetCat)) setMergeTargetCat(otherThanDefault);
+    if (splitSourceCat && !categories.includes(splitSourceCat)) setSplitSourceCat(defaultCat);
+    if (deleteCatTarget && !categories.includes(deleteCatTarget)) setDeleteCatTarget('');
+    if (filterCat !== 'All' && !categories.includes(filterCat)) setFilterCat('All');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categories]);
 
   const showCatNotice = (msg) => {
     setCatOpStatus(msg);
@@ -1491,7 +1596,7 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
     setNewMeaning(card.meaning || '');
     setNewPhonetic(card.phonetic === '[]' ? '' : (card.phonetic || ''));
     setNewPos(card.pos || 'n.');
-    setSelectedCat(card.category || categories[0] || '大考 1680 Unit 1');
+    setSelectedCat(card.category || defaultCat);
     setPhrases(
       card.phrases && card.phrases.length > 0
         ? card.phrases.map(p => ({ en: p.en || '', ch: p.ch || '' }))
@@ -2018,17 +2123,14 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
               />
             </div>
 
-            <select
+            <CategoryPicker
+              label="📌 新增到哪個科目？"
               value={selectedCat}
-              onChange={e => setSelectedCat(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
-            >
-              {categories.map(cat => (
-                <option key={cat} value={cat}>
-                  📂 {cat}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedCat}
+              categories={categories}
+              cards={cards}
+              defaultCat={defaultCat}
+            />
 
             {/* 相關片語編輯區 */}
             <div className="pt-2 border-t border-slate-800/80 space-y-2">
@@ -2085,7 +2187,7 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
                 editingId ? 'bg-amber-600 hover:bg-amber-500' : 'bg-indigo-600 hover:bg-indigo-500'
               }`}
             >
-              {editingId ? '儲存修改' : '新增至資料庫'}
+              {editingId ? '儲存修改' : `新增至「${selectedCat || '?'}」`}
             </button>
           </form>
         </section>
@@ -2107,20 +2209,14 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
             </button>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-400">匯入至目標分類</label>
-            <select
-              value={batchCategory}
-              onChange={e => setBatchCategory(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
-            >
-              {categories.map(cat => (
-                <option key={cat} value={cat}>
-                  📂 {cat}
-                </option>
-              ))}
-            </select>
-          </div>
+          <CategoryPicker
+            label="📌 匯入到哪個科目？"
+            value={batchCategory}
+            onChange={setBatchCategory}
+            categories={categories}
+            cards={cards}
+            defaultCat={defaultCat}
+          />
 
           {/* 重複單字處理策略 */}
           <div className="space-y-1.5">
@@ -2173,7 +2269,7 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
             onClick={handleBatchImport}
             className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl transition-all active:scale-[0.98]"
           >
-            一鍵寫入雲端資料庫
+            一鍵寫入「{batchCategory || '?'}」
           </button>
         </section>
       )}
@@ -2420,6 +2516,7 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
                 }}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
               >
+                <option value="">— 請明確選擇要刪除的科目 —</option>
                 {categories.map(cat => (
                   <option key={cat} value={cat}>
                     {cat}（含 {cards.filter(c => c.category === cat).length} 個單字）
@@ -2430,10 +2527,11 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
               {!confirmDeleteCat ? (
                 <button
                   type="button"
+                  disabled={!deleteCatTarget}
                   onClick={() => setConfirmDeleteCat(true)}
-                  className="w-full py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-xl border border-red-500/30"
+                  className="w-full py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-xl border border-red-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  刪除此科目與底下所有單字
+                  {deleteCatTarget ? `刪除「${deleteCatTarget}」與底下所有單字` : '請先選擇要刪除的科目'}
                 </button>
               ) : (
                 <div className="flex gap-2">
