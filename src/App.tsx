@@ -140,6 +140,28 @@ const INITIAL_CARDS = [
   },
 ];
 
+// 解析卡片排序值（相容舊資料 id 如 "1730000_12" 與新欄位 order）
+const getCardSortTuple = (card) => {
+  if (typeof card.order === 'number' && !Number.isNaN(card.order)) {
+    return [card.order, 0];
+  }
+  const rawId = String(card.id || '');
+  if (rawId.includes('_')) {
+    const [ts, idx] = rawId.split('_');
+    return [Number(ts) || 0, Number(idx) || 0];
+  }
+  return [Number(rawId) || 0, 0];
+};
+
+const sortCardsByOrder = (list) => {
+  return [...list].sort((a, b) => {
+    const [a1, a2] = getCardSortTuple(a);
+    const [b1, b2] = getCardSortTuple(b);
+    if (a1 !== b1) return a1 - b1;
+    return a2 - b2;
+  });
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('learn'); // 'learn', 'quiz', 'admin'
   const [customCategories, setCustomCategories] = useState(INITIAL_CATEGORIES);
@@ -174,13 +196,27 @@ export default function App() {
     const unsub = onSnapshot(cardsRef, async (snapshot) => {
       if (snapshot.empty) {
         // Seed initial data first time
-        INITIAL_CARDS.forEach(async (card) => {
-          await setDoc(doc(cardsRef, card.id.toString()), { ...card, id: card.id.toString() });
+        INITIAL_CARDS.forEach(async (card, idx) => {
+          await setDoc(doc(cardsRef, card.id.toString()), {
+            ...card,
+            id: card.id.toString(),
+            order: idx + 1,
+          });
         });
       } else {
-        const loaded = snapshot.docs.map(d => d.data());
-        // Sort by id to keep original order roughly
-        setCards(loaded.sort((a,b) => Number(a.id) - Number(b.id)));
+        const loaded = sortCardsByOrder(snapshot.docs.map(d => d.data()));
+        // 為每張卡標記它在所屬科目內的序號 (catSeq: 1, 2, 3...) 與全域序號 (globalSeq)
+        const catCounters = {};
+        const enriched = loaded.map((c, idx) => {
+          const cat = c.category || '未分類';
+          catCounters[cat] = (catCounters[cat] || 0) + 1;
+          return {
+            ...c,
+            globalSeq: idx + 1,
+            catSeq: catCounters[cat],
+          };
+        });
+        setCards(enriched);
         setIsSyncing(false);
       }
     }, (error) => {
@@ -207,18 +243,28 @@ export default function App() {
     } catch(e) { console.error("Update failed", e); }
   }, [cards, user]);
 
-  const resetProgress = useCallback(async (category = 'All') => {
+  const resetProgress = useCallback(async (targetCardsOrCategory = 'All') => {
     if (!user) return;
-    cards.forEach(async (card) => {
-      if (category === 'All' || card.category === category || (category === '錯題本' && card.mistake)) {
-         try {
-           await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'cards', card.id.toString()), {
-             mastery: 0,
-             mistake: false
-           });
-         } catch(e) {}
+    const targetList = Array.isArray(targetCardsOrCategory)
+      ? targetCardsOrCategory
+      : cards.filter(
+          card =>
+            targetCardsOrCategory === 'All' ||
+            card.category === targetCardsOrCategory ||
+            (targetCardsOrCategory === '錯題本' && card.mistake)
+        );
+    try {
+      for (let i = 0; i < targetList.length; i += 400) {
+        const batch = writeBatch(db);
+        targetList.slice(i, i + 400).forEach(card => {
+          const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', card.id.toString());
+          batch.update(ref, { mastery: 0, mistake: false });
+        });
+        await batch.commit();
       }
-    });
+    } catch (e) {
+      console.error('Reset progress failed', e);
+    }
   }, [cards, user]);
 
   if (!authReady) {
@@ -292,21 +338,59 @@ function NavButton({ icon: Icon, label, isActive, onClick }) {
   );
 }
 
+// 共用範圍過濾 Hook（支援單一科目、多科目勾選、以及第 N ~ M 號單字範圍）
+function useScopedCards(cards, activeCategory, selectedMultiCats, rangeStart, rangeEnd) {
+  return useMemo(() => {
+    let base = [];
+    if (selectedMultiCats.length > 0) {
+      base = cards.filter(c => selectedMultiCats.includes(c.category));
+    } else if (activeCategory === 'All') {
+      base = cards;
+    } else if (activeCategory === '錯題本') {
+      base = cards.filter(c => c.mistake);
+    } else {
+      base = cards.filter(c => c.category === activeCategory);
+    }
+
+    // 在目前選定的範圍內編號 1..N，方便用「第幾題 ~ 第幾題」切範圍
+    const indexed = base.map((c, idx) => ({ ...c, scopeSeq: idx + 1 }));
+    const start = parseInt(rangeStart, 10);
+    const end = parseInt(rangeEnd, 10);
+
+    const sliced = indexed.filter(c => {
+      if (!Number.isNaN(start) && start > 0 && c.scopeSeq < start) return false;
+      if (!Number.isNaN(end) && end > 0 && c.scopeSeq > end) return false;
+      return true;
+    });
+
+    return { baseTotal: indexed.length, scopedCards: sliced };
+  }, [cards, activeCategory, selectedMultiCats, rangeStart, rangeEnd]);
+}
+
 // --- LEARN VIEW COMPONENTS ---
 
 function LearnView({ categories, cards }) {
   const [activeCategory, setActiveCategory] = useState('All');
+  const [selectedMultiCats, setSelectedMultiCats] = useState([]);
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
 
-  const filteredCards = activeCategory === 'All' ? cards 
-                      : activeCategory === '錯題本' ? cards.filter(c => c.mistake)
-                      : cards.filter(c => c.category === activeCategory);
+  const { baseTotal, scopedCards: filteredCards } = useScopedCards(
+    cards,
+    activeCategory,
+    selectedMultiCats,
+    rangeStart,
+    rangeEnd
+  );
 
   useEffect(() => {
     setCurrentIndex(0);
     setIsFlipped(false);
-  }, [activeCategory]);
+  }, [activeCategory, selectedMultiCats, rangeStart, rangeEnd]);
+
+  const safeIndex = filteredCards.length > 0 ? Math.min(currentIndex, filteredCards.length - 1) : 0;
 
   const handleNext = () => {
     setIsFlipped(false);
@@ -320,14 +404,31 @@ function LearnView({ categories, cards }) {
 
   return (
     <div className="flex flex-col min-h-full">
-      <CategorySelector categories={categories} activeCategory={activeCategory} setActiveCategory={setActiveCategory} />
+      <CategorySelector
+        categories={categories}
+        activeCategory={activeCategory}
+        setActiveCategory={cat => {
+          setActiveCategory(cat);
+          setSelectedMultiCats([]);
+        }}
+        selectedMultiCats={selectedMultiCats}
+        setSelectedMultiCats={setSelectedMultiCats}
+        rangeStart={rangeStart}
+        setRangeStart={setRangeStart}
+        rangeEnd={rangeEnd}
+        setRangeEnd={setRangeEnd}
+        baseTotal={baseTotal}
+      />
 
       <div className="flex-1 flex flex-col justify-center items-center px-6 py-2 pb-6">
         {filteredCards.length > 0 ? (
           <>
             <div className="w-full flex justify-between items-center text-sm font-medium text-slate-500 mb-4 px-2">
-              <span>{filteredCards[currentIndex].category}</span>
-              <span>{currentIndex + 1} / {filteredCards.length}</span>
+              <span>
+                {filteredCards[safeIndex].category}{' '}
+                <span className="text-indigo-400 font-mono">#{filteredCards[safeIndex].scopeSeq}</span>
+              </span>
+              <span>{safeIndex + 1} / {filteredCards.length}</span>
             </div>
             
             <div 
@@ -338,33 +439,36 @@ function LearnView({ categories, cards }) {
                 
                 {/* Front */}
                 <div className="absolute inset-0 backface-hidden bg-slate-900 border border-slate-800 rounded-[2rem] shadow-xl flex flex-col items-center justify-center p-8 text-center group-hover:border-indigo-500/50 transition-colors">
+                  <span className="absolute top-6 left-6 text-xs font-mono font-bold text-slate-500 bg-slate-800/80 px-2.5 py-1 rounded-full">
+                    #{filteredCards[safeIndex].scopeSeq}
+                  </span>
                   <RotateCcw size={20} className="absolute top-6 right-6 text-slate-600" />
                   <div className="flex flex-col items-center justify-center mb-3">
-                    <h2 className="text-4xl font-extrabold text-slate-50 tracking-wide mb-3">{filteredCards[currentIndex].term}</h2>
+                    <h2 className="text-4xl font-extrabold text-slate-50 tracking-wide mb-3">{filteredCards[safeIndex].term}</h2>
                     <button 
-                      onClick={(e) => { e.stopPropagation(); playAudio(filteredCards[currentIndex].term); }} 
+                      onClick={(e) => { e.stopPropagation(); playAudio(filteredCards[safeIndex].term); }} 
                       className="p-3 bg-indigo-500/10 text-indigo-400 rounded-full hover:bg-indigo-500/30 transition-colors active:scale-95"
                     >
                       <Volume2 size={28} />
                     </button>
                   </div>
-                  <p className="text-lg text-indigo-300/80 font-mono tracking-wider">{filteredCards[currentIndex].phonetic}</p>
+                  <p className="text-lg text-indigo-300/80 font-mono tracking-wider">{filteredCards[safeIndex].phonetic}</p>
                 </div>
 
                 {/* Back */}
                 <div className="absolute inset-0 backface-hidden rotate-y-180 bg-slate-800 border border-indigo-500/30 rounded-[2rem] shadow-xl flex flex-col p-6 overflow-y-auto no-scrollbar">
                   <div className="mb-4 pb-4 border-b border-slate-700/50">
                     <div className="flex items-baseline gap-2 mb-2">
-                      <span className="text-sm font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">{filteredCards[currentIndex].pos}</span>
-                      <h3 className="text-xl font-bold text-slate-100">{filteredCards[currentIndex].meaning}</h3>
+                      <span className="text-sm font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">{filteredCards[safeIndex].pos}</span>
+                      <h3 className="text-xl font-bold text-slate-100">{filteredCards[safeIndex].meaning}</h3>
                     </div>
                   </div>
                   
-                  {filteredCards[currentIndex].phrases && filteredCards[currentIndex].phrases.length > 0 && (
+                  {filteredCards[safeIndex].phrases && filteredCards[safeIndex].phrases.length > 0 && (
                     <div className="flex-1">
                       <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">相關片語</h4>
                       <div className="space-y-3">
-                        {filteredCards[currentIndex].phrases.map((phrase, idx) => (
+                        {filteredCards[safeIndex].phrases.map((phrase, idx) => (
                           <div key={idx} className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/30">
                             <div className="flex items-start justify-between gap-2 mb-1">
                               <p className="text-sm font-semibold text-slate-200">{phrase.en}</p>
@@ -405,27 +509,31 @@ function LearnView({ categories, cards }) {
 
 function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
   const [activeCategory, setActiveCategory] = useState('All');
+  const [selectedMultiCats, setSelectedMultiCats] = useState([]);
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
   
   // Quiz State
   const [question, setQuestion] = useState(null);
   const [inputVal, setInputVal] = useState('');
   const [feedback, setFeedback] = useState(null); // 'correct', 'wrong', null
   const [showAnswer, setShowAnswer] = useState(false);
-  const [quizMode, setQuizMode] = useState('mixed'); // 'mixed', 'mc_meaning', 'mc_phrase', 'spelling'
+  const [quizMode, setQuizMode] = useState('mixed'); // 'mixed', 'mc_meaning', 'mc_term', 'mc_phrase', 'spelling'
 
-  // Active pool: Cards not yet fully mastered (mastery < 2)
+  const { baseTotal, scopedCards } = useScopedCards(
+    cards,
+    activeCategory,
+    selectedMultiCats,
+    rangeStart,
+    rangeEnd
+  );
+
+  // Active pool: Cards in scope not yet fully mastered (mastery < 2)
   const pool = useMemo(() => {
-    const filtered = activeCategory === 'All' ? cards 
-                   : activeCategory === '錯題本' ? cards.filter(c => c.mistake)
-                   : cards.filter(c => c.category === activeCategory);
-    return filtered.filter(c => c.mastery < 2);
-  }, [cards, activeCategory]);
+    return scopedCards.filter(c => c.mastery < 2);
+  }, [scopedCards]);
 
-  const totalInCat = useMemo(() => {
-    return activeCategory === 'All' ? cards.length 
-         : activeCategory === '錯題本' ? cards.filter(c => c.mistake).length
-         : cards.filter(c => c.category === activeCategory).length;
-  }, [cards, activeCategory]);
+  const totalInCat = scopedCards.length;
   
   const progressPercent = totalInCat === 0 ? 0 : Math.round(((totalInCat - pool.length) / totalInCat) * 100);
 
@@ -547,7 +655,31 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
 
   return (
     <div className="flex flex-col min-h-full pb-6">
-      <CategorySelector categories={categories} activeCategory={activeCategory} setActiveCategory={setActiveCategory} />
+      <CategorySelector
+        categories={categories}
+        activeCategory={activeCategory}
+        setActiveCategory={cat => {
+          setActiveCategory(cat);
+          setSelectedMultiCats([]);
+          setQuestion(null);
+        }}
+        selectedMultiCats={selectedMultiCats}
+        setSelectedMultiCats={next => {
+          setSelectedMultiCats(next);
+          setQuestion(null);
+        }}
+        rangeStart={rangeStart}
+        setRangeStart={val => {
+          setRangeStart(val);
+          setQuestion(null);
+        }}
+        rangeEnd={rangeEnd}
+        setRangeEnd={val => {
+          setRangeEnd(val);
+          setQuestion(null);
+        }}
+        baseTotal={baseTotal}
+      />
       
       {/* Quiz Mode Selector */}
       <div className="px-6 py-1.5 shrink-0">
@@ -576,7 +708,7 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
 
       <div className="px-6 py-1 shrink-0">
         <div className="flex justify-between text-xs font-bold text-slate-500 mb-1.5">
-          <span>學習進度</span>
+          <span>學習進度（目前範圍 {totalInCat} 字）</span>
           <span className="text-indigo-400">{progressPercent}%</span>
         </div>
         <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
@@ -595,14 +727,14 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
             </div>
             <h3 className="text-2xl font-bold text-slate-100 mb-2">全部學會了！</h3>
             <p className="text-slate-400 mb-8 max-w-[250px]">
-              {activeCategory === '錯題本' ? '太棒了！您的錯題本目前是空的！' : '此分類的單字皆已熟悉，或目前無符合此題型的單字！'}
+              {activeCategory === '錯題本' ? '太棒了！您的錯題本目前是空的！' : '目前選定範圍的單字皆已熟悉，或無符合此題型的單字！'}
             </p>
-            {activeCategory !== '錯題本' && (
+            {activeCategory !== '錯題本' && scopedCards.length > 0 && (
               <button 
-                onClick={() => resetProgress(activeCategory)}
+                onClick={() => resetProgress(scopedCards)}
                 className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full font-bold transition-all border border-slate-700 active:scale-95"
               >
-                <RotateCw size={18} /> 重新測驗
+                <RotateCw size={18} /> 重新測驗此範圍 ({scopedCards.length} 字)
               </button>
             )}
            </div>
@@ -622,7 +754,10 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
                     ? '🔤 中選英測驗'
                     : '🎯 英選中測驗'}
                 </span>
-                {feedback === 'wrong' && <span className="text-red-400">需複習</span>}
+                <span className="font-mono text-indigo-400">
+                  #{question.card.scopeSeq || question.card.catSeq || 1}
+                  {feedback === 'wrong' && <span className="text-red-400 ml-2">需複習</span>}
+                </span>
               </div>
 
               {question.type === 'mc_meaning' && (
@@ -756,27 +891,209 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
 
 // --- SHARED COMPONENTS ---
 
-function CategorySelector({ categories, activeCategory, setActiveCategory }) {
+function CategorySelector({
+  categories,
+  activeCategory,
+  setActiveCategory,
+  selectedMultiCats = [],
+  setSelectedMultiCats,
+  rangeStart = '',
+  setRangeStart,
+  rangeEnd = '',
+  setRangeEnd,
+  baseTotal = 0,
+}) {
+  const [showScopePanel, setShowScopePanel] = useState(false);
+
+  const hasCustomScope =
+    selectedMultiCats.length > 0 || Boolean(rangeStart) || Boolean(rangeEnd);
+
+  const toggleMultiCat = (cat) => {
+    if (!setSelectedMultiCats) return;
+    if (selectedMultiCats.includes(cat)) {
+      setSelectedMultiCats(selectedMultiCats.filter(c => c !== cat));
+    } else {
+      setSelectedMultiCats([...selectedMultiCats, cat]);
+    }
+  };
+
+  // 產生每 20 題的快速範圍按鈕
+  const quickRanges = useMemo(() => {
+    if (!baseTotal || baseTotal <= 10) return [];
+    const step = 20;
+    const chunks = [];
+    for (let s = 1; s <= baseTotal; s += step) {
+      const e = Math.min(s + step - 1, baseTotal);
+      chunks.push({ start: String(s), end: String(e), label: `${s}-${e}` });
+    }
+    return chunks;
+  }, [baseTotal]);
+
   return (
-    <div className="py-3 pl-6 pr-2 shrink-0">
-      <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 pr-6">
-        {['All', '錯題本', ...categories].map(cat => {
-          const label = cat === 'All' ? '全部單字' : cat === '錯題本' ? '⚠️ 錯題本' : cat;
-          return (
-            <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`whitespace-nowrap px-4 py-2 rounded-full text-xs font-bold transition-all border ${
-                activeCategory === cat 
-                  ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/20' 
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800'
-              }`}
-            >
-              {label}
-            </button>
-          )
-        })}
+    <div className="pt-3 pb-1 pl-6 pr-4 shrink-0 space-y-2">
+      <div className="flex items-center gap-2">
+        <div className="flex-1 flex gap-2 overflow-x-auto no-scrollbar pb-1">
+          {['All', '錯題本', ...categories].map(cat => {
+            const label = cat === 'All' ? '全部單字' : cat === '錯題本' ? '⚠️ 錯題本' : cat;
+            const isSelected =
+              selectedMultiCats.length > 0
+                ? selectedMultiCats.includes(cat)
+                : activeCategory === cat;
+            return (
+              <button
+                key={cat}
+                onClick={() => setActiveCategory(cat)}
+                className={`whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-bold transition-all border ${
+                  isSelected
+                    ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/20'
+                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {setRangeStart && (
+          <button
+            type="button"
+            onClick={() => setShowScopePanel(!showScopePanel)}
+            className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
+              hasCustomScope || showScopePanel
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
+                : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800'
+            }`}
+          >
+            🎯 範圍{rangeStart || rangeEnd ? ` (${rangeStart || 1}~${rangeEnd || baseTotal})` : selectedMultiCats.length > 0 ? ` (${selectedMultiCats.length}科)` : ''}
+          </button>
+        )}
       </div>
+
+      {showScopePanel && setRangeStart && (
+        <div className="mr-2 bg-slate-900/95 border border-slate-800 rounded-2xl p-3.5 space-y-3 text-xs shadow-lg">
+          {/* 1. 多科目同時勾選 */}
+          {categories.length > 1 && (
+            <div>
+              <div className="flex justify-between items-center mb-1.5">
+                <span className="font-bold text-slate-300">📚 跨科目聯合範圍（可多選）</span>
+                {selectedMultiCats.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMultiCats([])}
+                    className="text-[11px] text-slate-400 hover:text-white"
+                  >
+                    清除多選
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {categories.map(cat => {
+                  const active = selectedMultiCats.includes(cat);
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => toggleMultiCat(cat)}
+                      className={`px-2.5 py-1 rounded-lg font-bold border transition-all ${
+                        active
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60'
+                          : 'bg-slate-950 text-slate-400 border-slate-800'
+                      }`}
+                    >
+                      {active ? '✓ ' : '+ '}{cat}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 2. 序號區間範圍 */}
+          <div>
+            <div className="flex justify-between items-center mb-1.5">
+              <span className="font-bold text-slate-300">
+                🔢 單字序號範圍（共 {baseTotal} 字）
+              </span>
+              {(rangeStart || rangeEnd) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRangeStart('');
+                    setRangeEnd('');
+                  }}
+                  className="text-[11px] text-cyan-400 hover:text-cyan-300 font-bold"
+                >
+                  重置為全部 (1~{baseTotal})
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400">第</span>
+              <input
+                type="number"
+                min={1}
+                max={baseTotal || 9999}
+                value={rangeStart}
+                onChange={e => setRangeStart(e.target.value)}
+                placeholder="1"
+                className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-center font-mono text-slate-100 focus:border-cyan-500 focus:outline-none"
+              />
+              <span className="text-slate-400">～</span>
+              <input
+                type="number"
+                min={1}
+                max={baseTotal || 9999}
+                value={rangeEnd}
+                onChange={e => setRangeEnd(e.target.value)}
+                placeholder={String(baseTotal || 20)}
+                className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-center font-mono text-slate-100 focus:border-cyan-500 focus:outline-none"
+              />
+              <span className="text-slate-400">號單字</span>
+            </div>
+
+            {quickRanges.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRangeStart('');
+                    setRangeEnd('');
+                  }}
+                  className={`px-2 py-1 rounded-lg font-mono text-[11px] border ${
+                    !rangeStart && !rangeEnd
+                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/50 font-bold'
+                      : 'bg-slate-950 text-slate-400 border-slate-800'
+                  }`}
+                >
+                  全部
+                </button>
+                {quickRanges.map(r => {
+                  const isCurrent = rangeStart === r.start && rangeEnd === r.end;
+                  return (
+                    <button
+                      key={r.label}
+                      type="button"
+                      onClick={() => {
+                        setRangeStart(r.start);
+                        setRangeEnd(r.end);
+                      }}
+                      className={`px-2 py-1 rounded-lg font-mono text-[11px] border ${
+                        isCurrent
+                          ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 font-bold'
+                          : 'bg-slate-950 text-slate-400 border-slate-800'
+                      }`}
+                    >
+                      #{r.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -821,6 +1138,17 @@ function AdminView({ categories, setCategories, cards, user }) {
   const [newCatName, setNewCatName] = useState('');
   const [renameCatFrom, setRenameCatFrom] = useState(categories[0] || '');
   const [renameCatTo, setRenameCatTo] = useState('');
+  const [mergeSourceCat, setMergeSourceCat] = useState(categories[0] || '');
+  const [mergeTargetCat, setMergeTargetCat] = useState(categories[1] || categories[0] || '');
+  const [splitSourceCat, setSplitSourceCat] = useState(categories[0] || '');
+  const [splitMode, setSplitMode] = useState('range'); // 'range' | 'chunk'
+  const [splitStartSeq, setSplitStartSeq] = useState('21');
+  const [splitEndSeq, setSplitEndSeq] = useState('40');
+  const [splitTargetCat, setSplitTargetCat] = useState('');
+  const [splitChunkSize, setSplitChunkSize] = useState('20');
+  const [deleteCatTarget, setDeleteCatTarget] = useState(categories[0] || '');
+  const [confirmDeleteCat, setConfirmDeleteCat] = useState(false);
+  const [catOpStatus, setCatOpStatus] = useState('');
 
   // Batch Import State
   const [batchCategory, setBatchCategory] = useState(categories[0] || '大考 1680 Unit 1');
@@ -835,7 +1163,24 @@ function AdminView({ categories, setCategories, cards, user }) {
     if (!selectedCat && categories.length > 0) setSelectedCat(categories[0]);
     if (!batchCategory && categories.length > 0) setBatchCategory(categories[0]);
     if (!renameCatFrom && categories.length > 0) setRenameCatFrom(categories[0]);
-  }, [categories, selectedCat, batchCategory, renameCatFrom]);
+    if (!mergeSourceCat && categories.length > 0) setMergeSourceCat(categories[0]);
+    if (!mergeTargetCat && categories.length > 0) setMergeTargetCat(categories[1] || categories[0]);
+    if (!splitSourceCat && categories.length > 0) setSplitSourceCat(categories[0]);
+    if (!deleteCatTarget && categories.length > 0) setDeleteCatTarget(categories[0]);
+  }, [categories, selectedCat, batchCategory, renameCatFrom, mergeSourceCat, mergeTargetCat, splitSourceCat, deleteCatTarget]);
+
+  const showCatNotice = (msg) => {
+    setCatOpStatus(msg);
+    setTimeout(() => setCatOpStatus(''), 4000);
+  };
+
+  // 取得目前最大的 order 值，讓新匯入/新增的單字穩定排在最後面
+  const getMaxOrder = () => {
+    return cards.reduce((max, c, idx) => {
+      const ord = typeof c.order === 'number' ? c.order : idx + 1;
+      return Math.max(max, ord);
+    }, 0);
+  };
 
   const resetForm = () => {
     setEditingId(null);
@@ -880,6 +1225,7 @@ function AdminView({ categories, setCategories, cards, user }) {
       pos: newPos.trim() || 'n.',
       phrases: cleanPhrases,
       category: selectedCat.trim(),
+      order: existingCard && typeof existingCard.order === 'number' ? existingCard.order : getMaxOrder() + 1,
       mastery: existingCard ? existingCard.mastery : 0,
       mistake: existingCard ? existingCard.mistake : false,
     };
@@ -911,6 +1257,7 @@ function AdminView({ categories, setCategories, cards, user }) {
     setSelectedCat(trimmed);
     setBatchCategory(trimmed);
     setNewCatName('');
+    showCatNotice(`✅ 已新增科目「${trimmed}」`);
   };
 
   // 重新命名整個分類（同步更新雲端該分類所有單字）
@@ -921,17 +1268,167 @@ function AdminView({ categories, setCategories, cards, user }) {
 
     const affected = cards.filter(c => c.category === renameCatFrom);
     try {
-      const batch = writeBatch(db);
-      affected.forEach(c => {
-        const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
-        batch.update(ref, { category: targetName });
+      for (let i = 0; i < affected.length; i += 400) {
+        const batch = writeBatch(db);
+        affected.slice(i, i + 400).forEach(c => {
+          const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+          batch.update(ref, { category: targetName });
+        });
+        await batch.commit();
+      }
+      setCategories(prev => {
+        const mapped = prev.map(cat => (cat === renameCatFrom ? targetName : cat));
+        return Array.from(new Set(mapped));
       });
-      await batch.commit();
-      setCategories(prev => prev.map(cat => (cat === renameCatFrom ? targetName : cat)));
       setRenameCatFrom(targetName);
       setRenameCatTo('');
+      showCatNotice(`✅ 已改名為「${targetName}」`);
     } catch (err) {
       console.error('Rename category failed:', err);
+    }
+  };
+
+  // 合併 2 個科目（把 mergeSourceCat 所有單字併入 mergeTargetCat，並排在目標科目之後）
+  const handleMergeCategories = async (e) => {
+    e.preventDefault();
+    if (!user || !mergeSourceCat || !mergeTargetCat || mergeSourceCat === mergeTargetCat) {
+      showCatNotice('⚠️ 請選擇兩個不同的科目進行合併');
+      return;
+    }
+    const sourceCards = cards.filter(c => c.category === mergeSourceCat);
+    if (sourceCards.length === 0) {
+      setCategories(prev => prev.filter(c => c !== mergeSourceCat));
+      showCatNotice(`✅ 科目「${mergeSourceCat}」無單字，已直接移除空科目`);
+      return;
+    }
+
+    let nextOrder = getMaxOrder() + 1;
+    try {
+      for (let i = 0; i < sourceCards.length; i += 400) {
+        const batch = writeBatch(db);
+        sourceCards.slice(i, i + 400).forEach(c => {
+          const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+          batch.update(ref, { category: mergeTargetCat, order: nextOrder++ });
+        });
+        await batch.commit();
+      }
+      setCategories(prev => prev.filter(c => c !== mergeSourceCat));
+      showCatNotice(`✅ 已將「${mergeSourceCat}」(${sourceCards.length} 字) 合併至「${mergeTargetCat}」`);
+    } catch (err) {
+      console.error('Merge failed:', err);
+    }
+  };
+
+  // 拆分科目（支援：1.依序號區間拆到新科目 2.每 N 個字自動拆成多科）
+  const handleSplitCategory = async (e) => {
+    e.preventDefault();
+    if (!user || !splitSourceCat) return;
+    const sourceCards = cards.filter(c => c.category === splitSourceCat);
+    if (sourceCards.length === 0) {
+      showCatNotice('⚠️ 該科目目前沒有單字可拆分');
+      return;
+    }
+
+    try {
+      if (splitMode === 'range') {
+        const target = splitTargetCat.trim();
+        const s = parseInt(splitStartSeq, 10);
+        const end = parseInt(splitEndSeq, 10);
+        if (!target || Number.isNaN(s) || Number.isNaN(end) || s < 1 || end < s) {
+          showCatNotice('⚠️ 請輸入有效的起訖序號與新科目名稱');
+          return;
+        }
+        const toMove = sourceCards.filter((_, idx) => idx + 1 >= s && idx + 1 <= end);
+        if (toMove.length === 0) {
+          showCatNotice(`⚠️ 找不到第 ${s} ~ ${end} 號單字（該科共 ${sourceCards.length} 字）`);
+          return;
+        }
+        for (let i = 0; i < toMove.length; i += 400) {
+          const batch = writeBatch(db);
+          toMove.slice(i, i + 400).forEach(c => {
+            const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+            batch.update(ref, { category: target });
+          });
+          await batch.commit();
+        }
+        setCategories(prev => (prev.includes(target) ? prev : [...prev, target]));
+        setSplitTargetCat('');
+        showCatNotice(`✅ 已將第 ${s}~${end} 號（共 ${toMove.length} 字）拆至「${target}」`);
+      } else {
+        const size = parseInt(splitChunkSize, 10);
+        if (Number.isNaN(size) || size < 1) {
+          showCatNotice('⚠️ 請輸入每科幾個字（需大於 0）');
+          return;
+        }
+        const newCatNames = [];
+        for (let i = 0; i < sourceCards.length; i += 400) {
+          const batch = writeBatch(db);
+          sourceCards.slice(i, i + 400).forEach((c, idx) => {
+            const globalIdx = i + idx;
+            const partNum = Math.floor(globalIdx / size) + 1;
+            const newCat = `${splitSourceCat} (${partNum})`;
+            if (!newCatNames.includes(newCat)) newCatNames.push(newCat);
+            const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+            batch.update(ref, { category: newCat });
+          });
+          await batch.commit();
+        }
+        setCategories(prev => {
+          const filtered = prev.filter(c => c !== splitSourceCat);
+          return Array.from(new Set([...filtered, ...newCatNames]));
+        });
+        showCatNotice(`✅ 已按每 ${size} 字拆分為 ${newCatNames.length} 個子科目！`);
+      }
+    } catch (err) {
+      console.error('Split category failed:', err);
+    }
+  };
+
+  // 快速刪除整個科目及其所有單字
+  const handleDeleteCategory = async () => {
+    if (!user || !deleteCatTarget) return;
+    const toDelete = cards.filter(c => c.category === deleteCatTarget);
+    try {
+      for (let i = 0; i < toDelete.length; i += 400) {
+        const batch = writeBatch(db);
+        toDelete.slice(i, i + 400).forEach(c => {
+          const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+          batch.delete(ref);
+        });
+        await batch.commit();
+      }
+      setCategories(prev => prev.filter(c => c !== deleteCatTarget));
+      setConfirmDeleteCat(false);
+      showCatNotice(`🗑️ 已刪除科目「${deleteCatTarget}」及其 ${toDelete.length} 個單字`);
+    } catch (err) {
+      console.error('Delete category failed:', err);
+    }
+  };
+
+  // 重新整理排序（依匯入先後順序 或 依英文字母 A-Z 重新編號）
+  const handleNormalizeOrder = async (mode = 'keep') => {
+    if (!user || cards.length === 0) return;
+    const targetList =
+      mode === 'alpha'
+        ? [...cards].sort((a, b) => (a.term || '').localeCompare(b.term || ''))
+        : [...cards];
+
+    try {
+      for (let i = 0; i < targetList.length; i += 400) {
+        const batch = writeBatch(db);
+        targetList.slice(i, i + 400).forEach((c, idx) => {
+          const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
+          batch.update(ref, { order: i + idx + 1 });
+        });
+        await batch.commit();
+      }
+      showCatNotice(
+        mode === 'alpha'
+          ? '✅ 已依英文字母 A-Z 重新排序並固定所有序號！'
+          : '✅ 已依目前先後順序重新固定 #1 ~ #' + targetList.length + ' 序號！'
+      );
+    } catch (err) {
+      console.error('Reorder failed:', err);
     }
   };
 
@@ -941,6 +1438,8 @@ function AdminView({ categories, setCategories, cards, user }) {
     setBatchStatus('處理中...');
     const raw = batchText.trim();
     let parsedCards = [];
+    const baseOrder = getMaxOrder();
+    const baseTs = Date.now();
 
     try {
       if (raw.startsWith('[') || raw.startsWith('{')) {
@@ -949,7 +1448,8 @@ function AdminView({ categories, setCategories, cards, user }) {
         parsedCards = arr
           .filter(item => item && item.term && item.meaning)
           .map((item, idx) => ({
-            id: item.id ? item.id.toString() : `${Date.now()}_${idx}`,
+            id: item.id ? item.id.toString() : `${baseTs}_${idx}`,
+            order: typeof item.order === 'number' ? item.order : baseOrder + idx + 1,
             term: String(item.term).trim(),
             phonetic: item.phonetic ? String(item.phonetic).trim() : '[]',
             pos: item.pos ? String(item.pos).trim() : 'n.',
@@ -991,7 +1491,8 @@ function AdminView({ categories, setCategories, cards, user }) {
 
           if (term && meaning) {
             parsedCards.push({
-              id: `${Date.now()}_${idx}`,
+              id: `${baseTs}_${idx}`,
+              order: baseOrder + idx + 1,
               term,
               phonetic: phonetic || '[]',
               pos: pos || 'n.',
@@ -1274,12 +1775,19 @@ function AdminView({ categories, setCategories, cards, user }) {
         </section>
       )}
 
-      {/* 3. 分類新增與改名管理 */}
+      {/* 3. 分類新增、改名、合併、拆分、刪除、排序管理 */}
       {adminSubTab === 'categories' && (
         <section className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-5">
+          {catOpStatus && (
+            <div className="bg-indigo-500/20 border border-indigo-500/40 text-indigo-200 text-xs font-bold px-3.5 py-2.5 rounded-xl text-center">
+              {catOpStatus}
+            </div>
+          )}
+
+          {/* A. 新增科目 */}
           <div>
-            <h2 className="text-base font-bold text-slate-200 mb-3 flex items-center gap-2">
-              <FolderPlus size={18} className="text-indigo-400" /> 新增單元 / 分類
+            <h2 className="text-sm font-bold text-slate-200 mb-2.5 flex items-center gap-2">
+              <FolderPlus size={16} className="text-indigo-400" /> 1. 新增科目 / 單元
             </h2>
             <form onSubmit={handleAddCategory} className="flex gap-2">
               <input
@@ -1287,24 +1795,167 @@ function AdminView({ categories, setCategories, cards, user }) {
                 value={newCatName}
                 onChange={e => setNewCatName(e.target.value)}
                 placeholder="例如：大考 1680 Unit 2"
-                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-slate-200 focus:border-indigo-500 focus:outline-none"
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
               />
               <button
                 type="submit"
-                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shrink-0"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shrink-0"
               >
-                新增分類
+                新增
               </button>
             </form>
           </div>
 
+          {/* B. 合併兩個科目 */}
           <div className="pt-4 border-t border-slate-800">
-            <h3 className="text-xs font-bold text-slate-400 mb-2">重新命名分類（會自動搬移該分類下所有單字）</h3>
+            <h3 className="text-sm font-bold text-slate-200 mb-2">🔗 2. 合併兩個科目</h3>
+            <form onSubmit={handleMergeCategories} className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1">將此科目（來源）</label>
+                  <select
+                    value={mergeSourceCat}
+                    onChange={e => setMergeSourceCat(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200"
+                  >
+                    {categories.map(cat => (
+                      <option key={cat} value={cat}>
+                        {cat} ({cards.filter(c => c.category === cat).length}字)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1">併入此科目（目標）</label>
+                  <select
+                    value={mergeTargetCat}
+                    onChange={e => setMergeTargetCat(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs text-slate-200"
+                  >
+                    {categories.map(cat => (
+                      <option key={cat} value={cat}>
+                        {cat} ({cards.filter(c => c.category === cat).length}字)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <button
+                type="submit"
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-bold rounded-xl border border-slate-700"
+              >
+                確認合併科目（來源單字會接在目標科目後面）
+              </button>
+            </form>
+          </div>
+
+          {/* C. 拆分科目 */}
+          <div className="pt-4 border-t border-slate-800 space-y-2.5">
+            <h3 className="text-sm font-bold text-slate-200">✂️ 3. 拆開科目內容</h3>
+            <div>
+              <label className="text-[11px] text-slate-400 block mb-1">選擇要拆開的科目</label>
+              <select
+                value={splitSourceCat}
+                onChange={e => setSplitSourceCat(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+              >
+                {categories.map(cat => (
+                  <option key={cat} value={cat}>
+                    {cat}（共 {cards.filter(c => c.category === cat).length} 字）
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex gap-2 bg-slate-950 p-1 rounded-xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSplitMode('range')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
+                  splitMode === 'range' ? 'bg-slate-800 text-indigo-400' : 'text-slate-500'
+                }`}
+              >
+                按序號區間拆出
+              </button>
+              <button
+                type="button"
+                onClick={() => setSplitMode('chunk')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${
+                  splitMode === 'chunk' ? 'bg-slate-800 text-indigo-400' : 'text-slate-500'
+                }`}
+              >
+                每 N 字自動拆成多科
+              </button>
+            </div>
+
+            <form onSubmit={handleSplitCategory} className="space-y-2">
+              {splitMode === 'range' ? (
+                <>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-400">把第</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={splitStartSeq}
+                      onChange={e => setSplitStartSeq(e.target.value)}
+                      className="w-16 bg-slate-950 border border-slate-800 rounded-xl px-2 py-1.5 text-center font-mono text-slate-200"
+                    />
+                    <span className="text-slate-400">～</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={splitEndSeq}
+                      onChange={e => setSplitEndSeq(e.target.value)}
+                      className="w-16 bg-slate-950 border border-slate-800 rounded-xl px-2 py-1.5 text-center font-mono text-slate-200"
+                    />
+                    <span className="text-slate-400">號拆到：</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={splitTargetCat}
+                      onChange={e => setSplitTargetCat(e.target.value)}
+                      placeholder="輸入新科目名稱 (例: Unit 1-2)"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+                    />
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs font-bold rounded-xl border border-slate-700 shrink-0"
+                    >
+                      拆出
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">每</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={splitChunkSize}
+                    onChange={e => setSplitChunkSize(e.target.value)}
+                    className="w-20 bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-center font-mono text-xs text-slate-200"
+                  />
+                  <span className="text-xs text-slate-400">個字拆成一科</span>
+                  <button
+                    type="submit"
+                    className="ml-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs font-bold rounded-xl border border-slate-700 shrink-0"
+                  >
+                    自動均分拆開
+                  </button>
+                </div>
+              )}
+            </form>
+          </div>
+
+          {/* D. 重新命名科目 */}
+          <div className="pt-4 border-t border-slate-800">
+            <h3 className="text-sm font-bold text-slate-200 mb-2">✏️ 4. 重新命名科目</h3>
             <form onSubmit={handleRenameCategory} className="space-y-2">
               <select
                 value={renameCatFrom}
                 onChange={e => setRenameCatFrom(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
               >
                 {categories.map(cat => (
                   <option key={cat} value={cat}>
@@ -1317,17 +1968,89 @@ function AdminView({ categories, setCategories, cards, user }) {
                   type="text"
                   value={renameCatTo}
                   onChange={e => setRenameCatTo(e.target.value)}
-                  placeholder="輸入新分類名稱..."
-                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-slate-200"
+                  placeholder="輸入新科目名稱..."
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 shrink-0"
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 shrink-0"
                 >
                   確認改名
                 </button>
               </div>
             </form>
+          </div>
+
+          {/* E. 單字序號與排序整理 */}
+          <div className="pt-4 border-t border-slate-800">
+            <h3 className="text-sm font-bold text-slate-200 mb-1.5">🔢 5. 資料庫序號整理</h3>
+            <p className="text-[11px] text-slate-400 mb-2">
+              匯入時預設依先後順序編號（#1, #2...），方便考試時指定第幾題到第幾題。
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleNormalizeOrder('keep')}
+                className="py-2 px-3 bg-slate-950 hover:bg-slate-800 text-slate-300 text-xs font-bold rounded-xl border border-slate-800"
+              >
+                依匯入先後重新編號
+              </button>
+              <button
+                type="button"
+                onClick={() => handleNormalizeOrder('alpha')}
+                className="py-2 px-3 bg-slate-950 hover:bg-slate-800 text-slate-300 text-xs font-bold rounded-xl border border-slate-800"
+              >
+                依字母 A-Z 重新排序
+              </button>
+            </div>
+          </div>
+
+          {/* F. 快速刪除整個科目 */}
+          <div className="pt-4 border-t border-slate-800">
+            <h3 className="text-sm font-bold text-red-400 mb-2">🗑️ 6. 快速刪除整個科目</h3>
+            <div className="space-y-2">
+              <select
+                value={deleteCatTarget}
+                onChange={e => {
+                  setDeleteCatTarget(e.target.value);
+                  setConfirmDeleteCat(false);
+                }}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+              >
+                {categories.map(cat => (
+                  <option key={cat} value={cat}>
+                    {cat}（含 {cards.filter(c => c.category === cat).length} 個單字）
+                  </option>
+                ))}
+              </select>
+
+              {!confirmDeleteCat ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteCat(true)}
+                  className="w-full py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-xl border border-red-500/30"
+                >
+                  刪除此科目與底下所有單字
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDeleteCategory}
+                    className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl"
+                  >
+                    確定永久刪除「{deleteCatTarget}」
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteCat(false)}
+                    className="px-4 py-2.5 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+                  >
+                    取消
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </section>
       )}
@@ -1376,6 +2099,9 @@ function AdminView({ categories, setCategories, cards, user }) {
             >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300">
+                    #{card.catSeq || card.globalSeq}
+                  </span>
                   <h3 className="font-bold text-slate-200 truncate">{card.term}</h3>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400">
                     {card.pos}
