@@ -181,7 +181,16 @@ const getShortUserAlias = (user) => {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('learn'); // 'learn', 'quiz', 'admin'
-  const [customCategories, setCustomCategories] = useState(INITIAL_CATEGORIES);
+  const [customCategories, setCustomCategoriesState] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vocab_custom_categories');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return INITIAL_CATEGORIES;
+  });
   const [recentCategories, setRecentCategories] = useState(() => {
     try {
       const saved = localStorage.getItem('vocab_recent_categories');
@@ -204,6 +213,27 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isSyncing, setIsSyncing] = useState(true);
   const [authReady, setAuthReady] = useState(false);
+
+  // 包裝 setCustomCategories，確保新增/改名/刪除科目都會永久存入 localStorage 與 Firebase 雲端
+  const setCustomCategories = useCallback(
+    updater => {
+      setCustomCategoriesState(prev => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        try {
+          localStorage.setItem('vocab_custom_categories', JSON.stringify(next));
+        } catch {}
+        if (user) {
+          setDoc(
+            doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'prefs'),
+            { customCategories: next },
+            { merge: true }
+          ).catch(() => {});
+        }
+        return next;
+      });
+    },
+    [user]
+  );
 
   // 自動整合預設分類、自訂分類與雲端單字卡中的所有分類，並依「最近使用順序 (recentCategories)」排在最前面
   const categories = useMemo(() => {
@@ -281,6 +311,15 @@ export default function App() {
       snap => {
         if (snap.exists()) {
           const data = snap.data();
+          if (Array.isArray(data.customCategories) && data.customCategories.length > 0) {
+            setCustomCategoriesState(prev => {
+              const merged = Array.from(new Set([...prev, ...data.customCategories]));
+              try {
+                localStorage.setItem('vocab_custom_categories', JSON.stringify(merged));
+              } catch {}
+              return merged;
+            });
+          }
           if (Array.isArray(data.recentCategories) && data.recentCategories.length > 0) {
             setRecentCategories(data.recentCategories);
             try {
@@ -1086,6 +1125,8 @@ function CategorySelector({
   baseTotal = 0,
 }) {
   const [showScopePanel, setShowScopePanel] = useState(false);
+  const [expandAllCats, setExpandAllCats] = useState(false);
+  const scrollRef = React.useRef(null);
 
   const hasCustomScope =
     selectedMultiCats.length > 0 || Boolean(rangeStart) || Boolean(rangeEnd);
@@ -1111,11 +1152,27 @@ function CategorySelector({
     return chunks;
   }, [baseTotal]);
 
+  const allTabs = ['All', '錯題本', ...categories];
+
+  const handleSelectCat = (cat) => {
+    setActiveCategory(cat);
+    setExpandAllCats(false);
+    // 點選科目後自動把橫向選單捲回最左邊，因為該科目已經排到第 1 個了
+    if (scrollRef.current && cat !== 'All' && cat !== '錯題本') {
+      setTimeout(() => {
+        if (scrollRef.current) scrollRef.current.scrollTo({ left: 0, behavior: 'smooth' });
+      }, 50);
+    }
+  };
+
   return (
-    <div className="pt-3 pb-1 pl-6 pr-4 shrink-0 space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="flex-1 flex gap-2 overflow-x-auto no-scrollbar pb-1">
-          {['All', '錯題本', ...categories].map(cat => {
+    <div className="pt-2.5 pb-1 pl-5 pr-4 shrink-0 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <div
+          ref={scrollRef}
+          className="flex-1 min-w-0 flex gap-1.5 overflow-x-auto no-scrollbar pb-1 touch-pan-x"
+        >
+          {allTabs.map(cat => {
             const label = cat === 'All' ? '全部單字' : cat === '錯題本' ? '⚠️ 錯題本' : cat;
             const isSelected =
               selectedMultiCats.length > 0
@@ -1124,8 +1181,9 @@ function CategorySelector({
             return (
               <button
                 key={cat}
-                onClick={() => setActiveCategory(cat)}
-                className={`whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-bold transition-all border ${
+                type="button"
+                onClick={() => handleSelectCat(cat)}
+                className={`shrink-0 whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-bold transition-all border ${
                   isSelected
                     ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/20'
                     : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800'
@@ -1137,20 +1195,72 @@ function CategorySelector({
           })}
         </div>
 
+        {/* 展開全部科目按鈕（避免科目太多還要左右滑） */}
+        <button
+          type="button"
+          onClick={() => {
+            setExpandAllCats(!expandAllCats);
+            setShowScopePanel(false);
+          }}
+          title="展開所有科目"
+          className={`shrink-0 px-2.5 py-1.5 rounded-full text-xs font-bold border transition-all ${
+            expandAllCats
+              ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/50'
+              : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800'
+          }`}
+        >
+          {expandAllCats ? '▴ 收合' : `▾ 科目(${categories.length})`}
+        </button>
+
         {setRangeStart && (
           <button
             type="button"
-            onClick={() => setShowScopePanel(!showScopePanel)}
-            className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
+            onClick={() => {
+              setShowScopePanel(!showScopePanel);
+              setExpandAllCats(false);
+            }}
+            className={`shrink-0 px-2.5 py-1.5 rounded-full text-xs font-bold border transition-all ${
               hasCustomScope || showScopePanel
                 ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
                 : 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800'
             }`}
           >
-            🎯 範圍{rangeStart || rangeEnd ? ` (${rangeStart || 1}~${rangeEnd || baseTotal})` : selectedMultiCats.length > 0 ? ` (${selectedMultiCats.length}科)` : ''}
+            🎯 範圍{rangeStart || rangeEnd ? `(${rangeStart || 1}~${rangeEnd || baseTotal})` : selectedMultiCats.length > 0 ? `(${selectedMultiCats.length}科)` : ''}
           </button>
         )}
       </div>
+
+      {/* 展開全部科目網格面板 */}
+      {expandAllCats && (
+        <div className="bg-slate-900/95 border border-slate-800 rounded-2xl p-3 shadow-lg">
+          <div className="text-[11px] font-bold text-slate-400 mb-2">
+            點選要切換的科目（共 {categories.length} 個科目，點選後會自動排到最前面）：
+          </div>
+          <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto">
+            {allTabs.map(cat => {
+              const label = cat === 'All' ? '全部單字' : cat === '錯題本' ? '⚠️ 錯題本' : cat;
+              const isSelected =
+                selectedMultiCats.length > 0
+                  ? selectedMultiCats.includes(cat)
+                  : activeCategory === cat;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => handleSelectCat(cat)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                    isSelected
+                      ? 'bg-indigo-500 text-white border-indigo-500'
+                      : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {showScopePanel && setRangeStart && (
         <div className="mr-2 bg-slate-900/95 border border-slate-800 rounded-2xl p-3.5 space-y-3 text-xs shadow-lg">
