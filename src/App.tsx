@@ -285,37 +285,37 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans sm:bg-slate-900 sm:py-8 select-none">
+    <div className="h-[100dvh] w-full overflow-hidden bg-slate-950 text-slate-100 font-sans sm:bg-slate-900 sm:py-6 select-none flex flex-col justify-center">
       <style dangerouslySetInnerHTML={{ __html: customCss }} />
       
-      <div className="w-full h-[100dvh] sm:h-[850px] max-w-md mx-auto bg-slate-950 sm:rounded-[2.5rem] sm:shadow-2xl sm:border-8 border-slate-900 flex flex-col overflow-hidden relative">
+      <div className="w-full h-full sm:h-[844px] max-w-[430px] mx-auto bg-slate-950 sm:rounded-[2.75rem] sm:shadow-2xl sm:border-[6px] border-slate-800 flex flex-col overflow-hidden relative">
         
-        <header className="px-6 py-4 border-b border-slate-800 bg-slate-950/90 backdrop-blur-md z-10 flex-shrink-0">
+        <header className="px-5 pt-[max(0.65rem,env(safe-area-inset-top))] pb-2.5 border-b border-slate-800/80 bg-slate-950/95 backdrop-blur-md z-10 shrink-0">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-indigo-500/20 rounded-xl text-indigo-400">
-                <GraduationCap size={24} />
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 bg-indigo-500/20 rounded-xl text-indigo-400">
+                <GraduationCap size={20} />
               </div>
               <div>
-                <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent flex items-center gap-2">
-                  智能單字庫 {user && !isSyncing && <Cloud size={18} className="text-cyan-400" />}
+                <h1 className="text-base font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent flex items-center gap-1.5 leading-tight">
+                  智能單字庫 {user && !isSyncing && <Cloud size={15} className="text-cyan-400" />}
                 </h1>
-                <p className="text-xs text-slate-500 font-medium">1680 大考必備</p>
+                <p className="text-[11px] text-slate-500 font-medium leading-tight">1680 大考必備</p>
               </div>
             </div>
             <button onClick={() => signOut(auth)} title={user.email || '登出'} className="p-2 text-slate-500 hover:text-slate-300 bg-slate-900 rounded-xl transition-colors">
-              <LogOut size={18} />
+              <LogOut size={16} />
             </button>
           </div>
         </header>
 
-        <main className="flex-1 min-h-0 overflow-y-auto bg-slate-950">
+        <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-slate-950">
           {activeTab === 'learn' && <LearnView categories={categories} cards={cards} />}
           {activeTab === 'quiz' && <QuizView categories={categories} cards={cards} updateCardMastery={updateCardMastery} resetProgress={resetProgress} />}
           {activeTab === 'admin' && <AdminView categories={categories} setCategories={setCustomCategories} cards={cards} user={user} />}
         </main>
 
-        <nav className="shrink-0 w-full bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 pt-1.5 px-4 pb-4 flex justify-around items-center z-20">
+        <nav className="shrink-0 w-full bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 pt-1 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex justify-around items-center z-20">
           <NavButton icon={BookOpen} label="複習" isActive={activeTab === 'learn'} onClick={() => setActiveTab('learn')} />
           <NavButton icon={BrainCircuit} label="測驗" isActive={activeTab === 'quiz'} onClick={() => setActiveTab('quiz')} />
           <NavButton icon={Database} label="管理" isActive={activeTab === 'admin'} onClick={() => setActiveTab('admin')} />
@@ -329,11 +329,10 @@ function NavButton({ icon: Icon, label, isActive, onClick }) {
   return (
     <button 
       onClick={onClick}
-      className={`flex flex-col items-center p-3 transition-all duration-300 w-20 ${isActive ? 'text-indigo-400 transform -translate-y-1' : 'text-slate-500 hover:text-slate-300'}`}
+      className={`relative flex flex-col items-center py-1.5 px-3 transition-all duration-200 w-20 ${isActive ? 'text-indigo-400' : 'text-slate-500 hover:text-slate-300'}`}
     >
-      <Icon size={24} className={`mb-1.5 ${isActive ? 'drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]' : ''}`} />
-      <span className="text-[11px] font-bold">{label}</span>
-      {isActive && <div className="absolute bottom-1 w-1 h-1 rounded-full bg-indigo-400" />}
+      <Icon size={21} className={`mb-0.5 ${isActive ? 'drop-shadow-[0_0_8px_rgba(99,102,241,0.5)]' : ''}`} />
+      <span className="text-[11px] font-bold leading-tight">{label}</span>
     </button>
   );
 }
@@ -420,66 +419,66 @@ function LearnView({ categories, cards }) {
         baseTotal={baseTotal}
       />
 
-      <div className="flex-1 flex flex-col justify-center items-center px-6 py-2 pb-6">
+      <div className="flex-1 flex flex-col justify-between items-center px-5 py-2 pb-4 min-h-0">
         {filteredCards.length > 0 ? (
           <>
-            <div className="w-full flex justify-between items-center text-sm font-medium text-slate-500 mb-4 px-2">
-              <span>
+            <div className="w-full flex justify-between items-center text-xs font-medium text-slate-500 mb-2 px-1 shrink-0">
+              <span className="truncate max-w-[70%]">
                 {filteredCards[safeIndex].category}{' '}
                 <span className="text-indigo-400 font-mono">#{filteredCards[safeIndex].scopeSeq}</span>
               </span>
-              <span>{safeIndex + 1} / {filteredCards.length}</span>
+              <span className="font-mono">{safeIndex + 1} / {filteredCards.length}</span>
             </div>
             
             <div 
-              className="w-full aspect-[3/4] max-h-[420px] perspective-1000 cursor-pointer group"
+              className="w-full flex-1 min-h-[240px] max-h-[380px] perspective-1000 cursor-pointer group"
               onClick={() => setIsFlipped(!isFlipped)}
             >
               <div className={`relative w-full h-full transform-style-3d transition-transform duration-500 ease-out ${isFlipped ? 'rotate-y-180' : ''}`}>
                 
                 {/* Front */}
-                <div className="absolute inset-0 backface-hidden bg-slate-900 border border-slate-800 rounded-[2rem] shadow-xl flex flex-col items-center justify-center p-8 text-center group-hover:border-indigo-500/50 transition-colors">
-                  <span className="absolute top-6 left-6 text-xs font-mono font-bold text-slate-500 bg-slate-800/80 px-2.5 py-1 rounded-full">
+                <div className="absolute inset-0 backface-hidden bg-slate-900 border border-slate-800 rounded-[1.75rem] shadow-xl flex flex-col items-center justify-center p-6 text-center group-hover:border-indigo-500/50 transition-colors">
+                  <span className="absolute top-5 left-5 text-xs font-mono font-bold text-slate-500 bg-slate-800/80 px-2.5 py-1 rounded-full">
                     #{filteredCards[safeIndex].scopeSeq}
                   </span>
-                  <RotateCcw size={20} className="absolute top-6 right-6 text-slate-600" />
-                  <div className="flex flex-col items-center justify-center mb-3">
-                    <h2 className="text-4xl font-extrabold text-slate-50 tracking-wide mb-3">{filteredCards[safeIndex].term}</h2>
+                  <RotateCcw size={18} className="absolute top-5 right-5 text-slate-600" />
+                  <div className="flex flex-col items-center justify-center mb-2">
+                    <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-50 tracking-wide mb-3">{filteredCards[safeIndex].term}</h2>
                     <button 
                       onClick={(e) => { e.stopPropagation(); playAudio(filteredCards[safeIndex].term); }} 
                       className="p-3 bg-indigo-500/10 text-indigo-400 rounded-full hover:bg-indigo-500/30 transition-colors active:scale-95"
                     >
-                      <Volume2 size={28} />
+                      <Volume2 size={26} />
                     </button>
                   </div>
-                  <p className="text-lg text-indigo-300/80 font-mono tracking-wider">{filteredCards[safeIndex].phonetic}</p>
+                  <p className="text-base text-indigo-300/80 font-mono tracking-wider">{filteredCards[safeIndex].phonetic}</p>
                 </div>
 
                 {/* Back */}
-                <div className="absolute inset-0 backface-hidden rotate-y-180 bg-slate-800 border border-indigo-500/30 rounded-[2rem] shadow-xl flex flex-col p-6 overflow-y-auto no-scrollbar">
-                  <div className="mb-4 pb-4 border-b border-slate-700/50">
-                    <div className="flex items-baseline gap-2 mb-2">
-                      <span className="text-sm font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded">{filteredCards[safeIndex].pos}</span>
-                      <h3 className="text-xl font-bold text-slate-100">{filteredCards[safeIndex].meaning}</h3>
+                <div className="absolute inset-0 backface-hidden rotate-y-180 bg-slate-800 border border-indigo-500/30 rounded-[1.75rem] shadow-xl flex flex-col p-5 overflow-y-auto no-scrollbar">
+                  <div className="mb-3 pb-3 border-b border-slate-700/50">
+                    <div className="flex items-baseline gap-2 mb-1">
+                      <span className="text-xs font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded shrink-0">{filteredCards[safeIndex].pos}</span>
+                      <h3 className="text-lg font-bold text-slate-100">{filteredCards[safeIndex].meaning}</h3>
                     </div>
                   </div>
                   
                   {filteredCards[safeIndex].phrases && filteredCards[safeIndex].phrases.length > 0 && (
                     <div className="flex-1">
-                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">相關片語</h4>
-                      <div className="space-y-3">
+                      <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">相關片語</h4>
+                      <div className="space-y-2">
                         {filteredCards[safeIndex].phrases.map((phrase, idx) => (
-                          <div key={idx} className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/30">
-                            <div className="flex items-start justify-between gap-2 mb-1">
-                              <p className="text-sm font-semibold text-slate-200">{phrase.en}</p>
+                          <div key={idx} className="bg-slate-900/60 rounded-xl p-2.5 border border-slate-700/30">
+                            <div className="flex items-start justify-between gap-2 mb-0.5">
+                              <p className="text-xs font-semibold text-slate-200">{phrase.en}</p>
                               <button 
                                 onClick={(e) => { e.stopPropagation(); playAudio(phrase.en); }}
                                 className="text-indigo-400 p-1 bg-indigo-500/10 hover:bg-indigo-500/30 rounded transition-colors shrink-0"
                               >
-                                <Volume2 size={16} />
+                                <Volume2 size={14} />
                               </button>
                             </div>
-                            <p className="text-sm text-slate-400">{phrase.ch}</p>
+                            <p className="text-xs text-slate-400">{phrase.ch}</p>
                           </div>
                         ))}
                       </div>
@@ -489,12 +488,12 @@ function LearnView({ categories, cards }) {
               </div>
             </div>
 
-            <div className="flex items-center gap-6 mt-8">
-              <button onClick={handlePrev} className="w-12 h-12 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 hover:text-white transition-colors active:scale-95"><ChevronLeft size={24} /></button>
-              <button onClick={() => setIsFlipped(!isFlipped)} className="flex-1 py-3.5 rounded-2xl bg-indigo-600/20 text-indigo-400 font-bold active:scale-95 transition-all border border-indigo-500/30">
+            <div className="w-full flex items-center gap-4 mt-4 shrink-0">
+              <button onClick={handlePrev} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-800 text-slate-300 hover:text-white transition-colors active:scale-95 shrink-0"><ChevronLeft size={24} /></button>
+              <button onClick={() => setIsFlipped(!isFlipped)} className="flex-1 py-3.5 rounded-2xl bg-indigo-600/20 text-indigo-400 font-bold active:scale-95 transition-all border border-indigo-500/30 text-sm">
                 {isFlipped ? '看單字' : '看解釋'}
               </button>
-              <button onClick={handleNext} className="w-12 h-12 flex items-center justify-center rounded-full bg-slate-800 text-slate-300 hover:text-white transition-colors active:scale-95"><ChevronRight size={24} /></button>
+              <button onClick={handleNext} className="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-800 text-slate-300 hover:text-white transition-colors active:scale-95 shrink-0"><ChevronRight size={24} /></button>
             </div>
           </>
         ) : (
@@ -719,22 +718,22 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
         </div>
       </div>
 
-      <div className="px-6 py-3 flex-1 flex flex-col">
+      <div className="px-5 py-2 flex-1 flex flex-col">
         {!question ? (
-           <div className="flex-1 flex flex-col items-center justify-center text-center py-8">
-            <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mb-4 border border-green-500/30">
-              <Check size={40} className="text-green-400" />
+           <div className="flex-1 flex flex-col items-center justify-center text-center py-6">
+            <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mb-3 border border-green-500/30">
+              <Check size={34} className="text-green-400" />
             </div>
-            <h3 className="text-2xl font-bold text-slate-100 mb-2">全部學會了！</h3>
-            <p className="text-slate-400 mb-8 max-w-[250px]">
+            <h3 className="text-xl font-bold text-slate-100 mb-1.5">全部學會了！</h3>
+            <p className="text-xs text-slate-400 mb-6 max-w-[240px]">
               {activeCategory === '錯題本' ? '太棒了！您的錯題本目前是空的！' : '目前選定範圍的單字皆已熟悉，或無符合此題型的單字！'}
             </p>
             {activeCategory !== '錯題本' && scopedCards.length > 0 && (
               <button 
                 onClick={() => resetProgress(scopedCards)}
-                className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full font-bold transition-all border border-slate-700 active:scale-95"
+                className="flex items-center gap-2 px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-sm font-bold transition-all border border-slate-700 active:scale-95"
               >
-                <RotateCw size={18} /> 重新測驗此範圍 ({scopedCards.length} 字)
+                <RotateCw size={16} /> 重新測驗此範圍 ({scopedCards.length} 字)
               </button>
             )}
            </div>
@@ -742,9 +741,9 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
           <div className="flex-1 flex flex-col max-w-sm w-full mx-auto">
             
             {/* Question Card */}
-            <div className={`bg-slate-900 border ${feedback === 'correct' ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.2)]' : feedback === 'wrong' ? 'border-red-500/50 animate-shake' : 'border-slate-800'} rounded-[1.75rem] p-5 shadow-xl mb-4 transition-all`}>
+            <div className={`bg-slate-900 border ${feedback === 'correct' ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.2)]' : feedback === 'wrong' ? 'border-red-500/50 animate-shake' : 'border-slate-800'} rounded-3xl p-4 shadow-xl mb-3 transition-all`}>
               
-              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 flex justify-between items-center">
                 <span>
                   {question.type === 'spelling'
                     ? '📝 拼字測驗'
@@ -761,33 +760,33 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
               </div>
 
               {question.type === 'mc_meaning' && (
-                <div className="text-center py-2">
-                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-sm font-bold mb-2">{question.card.pos}</span>
-                  <div className="flex justify-center items-center gap-3 mb-1">
-                    <h2 className="text-3xl font-extrabold text-slate-50">{question.card.term}</h2>
+                <div className="text-center py-1">
+                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-xs font-bold mb-1">{question.card.pos}</span>
+                  <div className="flex justify-center items-center gap-2.5 mb-0.5">
+                    <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-50">{question.card.term}</h2>
                     <button 
                       onClick={() => playAudio(question.card.term)} 
-                      className="p-2 bg-indigo-500/10 text-indigo-400 rounded-full hover:bg-indigo-500/30 transition-colors active:scale-95"
+                      className="p-1.5 bg-indigo-500/10 text-indigo-400 rounded-full hover:bg-indigo-500/30 transition-colors active:scale-95"
                     >
-                      <Volume2 size={22} />
+                      <Volume2 size={20} />
                     </button>
                   </div>
-                  <p className="text-indigo-400 font-mono text-sm">{question.card.phonetic}</p>
+                  <p className="text-indigo-400 font-mono text-xs">{question.card.phonetic}</p>
                 </div>
               )}
 
               {question.type === 'mc_term' && (
-                <div className="text-center py-2">
-                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-sm font-bold mb-2">{question.card.pos}</span>
-                  <h2 className="text-2xl font-bold text-slate-100 leading-snug mb-1">{question.card.meaning}</h2>
+                <div className="text-center py-1">
+                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-xs font-bold mb-1">{question.card.pos}</span>
+                  <h2 className="text-xl font-bold text-slate-100 leading-snug">{question.card.meaning}</h2>
                   {showAnswer && (
-                    <div className="flex justify-center items-center gap-2 mt-2 text-indigo-400">
-                      <span className="font-mono text-sm">{question.card.phonetic}</span>
+                    <div className="flex justify-center items-center gap-2 mt-1 text-indigo-400">
+                      <span className="font-mono text-xs">{question.card.phonetic}</span>
                       <button
                         onClick={() => playAudio(question.card.term)}
-                        className="p-1.5 bg-indigo-500/10 rounded-full hover:bg-indigo-500/30"
+                        className="p-1 bg-indigo-500/10 rounded-full hover:bg-indigo-500/30"
                       >
-                        <Volume2 size={18} />
+                        <Volume2 size={16} />
                       </button>
                     </div>
                   )}
@@ -795,22 +794,22 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
               )}
 
               {question.type === 'mc_phrase' && (
-                <div className="text-center py-2">
-                   <h2 className="text-xl font-bold text-slate-100 leading-snug">{question.targetPhrase.ch}</h2>
+                <div className="text-center py-1.5">
+                   <h2 className="text-lg font-bold text-slate-100 leading-snug">{question.targetPhrase.ch}</h2>
                 </div>
               )}
 
               {question.type === 'spelling' && (
-                <div className="text-center py-2">
-                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-sm font-bold mb-2">{question.card.pos}</span>
-                  <h2 className="text-2xl font-bold text-slate-100 mb-1">{question.card.meaning}</h2>
-                  <p className="text-slate-500 font-mono text-sm">{question.card.phonetic}</p>
+                <div className="text-center py-1">
+                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-xs font-bold mb-1">{question.card.pos}</span>
+                  <h2 className="text-xl font-bold text-slate-100 mb-0.5">{question.card.meaning}</h2>
+                  <p className="text-slate-500 font-mono text-xs">{question.card.phonetic}</p>
                 </div>
               )}
             </div>
 
             {/* Answer Area */}
-            <div className="flex flex-col gap-2.5">
+            <div className="flex flex-col gap-2">
               {(question.type === 'mc_meaning' || question.type === 'mc_term' || question.type === 'mc_phrase') && question.options.map((opt, idx) => {
                 let btnClass = "bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700";
                 
@@ -833,7 +832,7 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
                     key={idx}
                     disabled={showAnswer}
                     onClick={() => handleAnswer(opt)}
-                    className={`w-full p-3.5 rounded-2xl border text-left font-medium transition-all active:scale-[0.98] ${btnClass}`}
+                    className={`w-full py-3 px-4 rounded-2xl border text-left text-sm font-medium transition-all active:scale-[0.98] leading-snug ${btnClass}`}
                   >
                     {opt}
                   </button>
