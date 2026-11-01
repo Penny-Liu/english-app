@@ -1446,6 +1446,7 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
   const [batchCategory, setBatchCategory] = useState(categories[0] || '大考 1680 Unit 1');
   const [batchText, setBatchText] = useState('');
   const [batchStatus, setBatchStatus] = useState('');
+  const [duplicateStrategy, setDuplicateStrategy] = useState('merge'); // 'merge' | 'skip' | 'overwrite'
 
   // Filter & Search State for List
   const [searchQuery, setSearchQuery] = useState('');
@@ -1805,9 +1806,84 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
         return;
       }
 
+      // 建立已存在單字的映射表（以小寫單字名當 key），支援全資料庫或同科目查重
+      const existingMap = new Map();
+      cards.forEach(c => {
+        const key = (c.term || '').trim().toLowerCase();
+        if (key) existingMap.set(key, c);
+      });
+
+      const finalCardsToSave = [];
+      let mergedCount = 0;
+      let skippedCount = 0;
+      let newCount = 0;
+
+      parsedCards.forEach(incoming => {
+        const key = incoming.term.toLowerCase();
+        const existing = existingMap.get(key);
+
+        if (existing) {
+          if (duplicateStrategy === 'skip') {
+            skippedCount++;
+            return;
+          }
+
+          if (duplicateStrategy === 'overwrite') {
+            // 覆蓋舊資料，但保留舊卡片的 id 與學習熟練度
+            finalCardsToSave.push({
+              ...incoming,
+              id: existing.id.toString(),
+              order: existing.order || incoming.order,
+              mastery: existing.mastery || 0,
+              mistake: existing.mistake || false,
+            });
+            mergedCount++;
+            return;
+          }
+
+          if (duplicateStrategy === 'merge') {
+            // 智能整合：合併中文解釋與片語
+            let combinedMeaning = existing.meaning || '';
+            if (incoming.meaning && !combinedMeaning.includes(incoming.meaning)) {
+              combinedMeaning = combinedMeaning ? `${combinedMeaning}；${incoming.meaning}` : incoming.meaning;
+            }
+
+            // 合併片語（去除重複英文）
+            const phraseMap = new Map();
+            (existing.phrases || []).forEach(p => {
+              if (p && p.en) phraseMap.set(p.en.toLowerCase().trim(), p);
+            });
+            (incoming.phrases || []).forEach(p => {
+              if (p && p.en) phraseMap.set(p.en.toLowerCase().trim(), p);
+            });
+
+            // 詞性補充
+            let combinedPos = existing.pos || incoming.pos || 'n.';
+            if (incoming.pos && !combinedPos.includes(incoming.pos)) {
+              combinedPos = `${combinedPos} / ${incoming.pos}`;
+            }
+
+            finalCardsToSave.push({
+              ...existing,
+              meaning: combinedMeaning,
+              pos: combinedPos,
+              phonetic: existing.phonetic && existing.phonetic !== '[]' ? existing.phonetic : incoming.phonetic,
+              phrases: Array.from(phraseMap.values()),
+              category: incoming.category || existing.category,
+            });
+            mergedCount++;
+            return;
+          }
+        }
+
+        // 新單字直接新增
+        finalCardsToSave.push(incoming);
+        newCount++;
+      });
+
       // Firestore batch 上限 500 筆，分批寫入
-      for (let i = 0; i < parsedCards.length; i += 400) {
-        const chunk = parsedCards.slice(i, i + 400);
+      for (let i = 0; i < finalCardsToSave.length; i += 400) {
+        const chunk = finalCardsToSave.slice(i, i + 400);
         const batch = writeBatch(db);
         chunk.forEach(c => {
           const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'cards', c.id.toString());
@@ -1818,8 +1894,12 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
 
       if (touchCategory) touchCategory(batchCategory, true);
       setBatchText('');
-      setBatchStatus(`✅ 成功匯入 ${parsedCards.length} 個單字！`);
-      setTimeout(() => setBatchStatus(''), 4000);
+      const statusParts = [];
+      if (newCount > 0) statusParts.push(`新增 ${newCount} 字`);
+      if (mergedCount > 0) statusParts.push(`整合 ${mergedCount} 重複字`);
+      if (skippedCount > 0) statusParts.push(`略過 ${skippedCount} 字`);
+      setBatchStatus(`✅ 匯入完成（${statusParts.join('、')}）`);
+      setTimeout(() => setBatchStatus(''), 4500);
     } catch (err) {
       console.error(err);
       setBatchStatus('❌ 匯入失敗：格式有誤 (' + err.message + ')');
@@ -2040,6 +2120,34 @@ function AdminView({ categories, setCategories, touchCategory, cards, user }) {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* 重複單字處理策略 */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
+              <span>🔄 若遇到資料庫已存在的單字時：</span>
+            </label>
+            <div className="grid grid-cols-3 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+              {[
+                { id: 'merge', label: '🔗 智能整合', desc: '合併中文與片語' },
+                { id: 'skip', label: '⏭️ 略過重複', desc: '保留舊單字不變' },
+                { id: 'overwrite', label: '덮 覆蓋更新', desc: '新內容取代舊內容' },
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setDuplicateStrategy(opt.id)}
+                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all text-center ${
+                    duplicateStrategy === opt.id
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div>{opt.label}</div>
+                  <div className="text-[10px] font-normal opacity-75">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3 text-[11px] text-slate-400 space-y-1 leading-relaxed">
