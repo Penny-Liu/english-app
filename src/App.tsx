@@ -162,6 +162,23 @@ const sortCardsByOrder = (list) => {
   });
 };
 
+// 從 Google 帳號自動擷取簡短代稱（例如 "Penny Liu" -> "Penny"、"劉雅萍" -> "雅萍" 或全名）
+const getShortUserAlias = (user) => {
+  if (!user) return '';
+  const name = (user.displayName || '').trim();
+  if (name) {
+    if (name.includes(' ')) {
+      return name.split(/\s+/)[0];
+    }
+    if (/^[\u4e00-\u9fa5]{3,4}$/.test(name)) {
+      return name.slice(-2);
+    }
+    return name.slice(0, 8);
+  }
+  const emailPrefix = (user.email || '').split('@')[0];
+  return emailPrefix.slice(0, 8) || 'User';
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('learn'); // 'learn', 'quiz', 'admin'
   const [customCategories, setCustomCategories] = useState(INITIAL_CATEGORIES);
@@ -397,9 +414,26 @@ export default function App() {
                 <p className="text-[11px] text-slate-500 font-medium leading-tight">1680 大考必備</p>
               </div>
             </div>
-            <button onClick={() => signOut(auth)} title={user.email || '登出'} className="p-2 text-slate-500 hover:text-slate-300 bg-slate-900 rounded-xl transition-colors">
-              <LogOut size={16} />
-            </button>
+            <div className="flex items-center gap-2">
+              <div
+                title={`${user.displayName || ''} (${user.email || ''})`}
+                className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 bg-slate-900 border border-slate-800 rounded-full"
+              >
+                <span className="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] font-extrabold flex items-center justify-center uppercase shrink-0">
+                  {getShortUserAlias(user).slice(0, 1)}
+                </span>
+                <span className="text-xs font-bold text-slate-300 max-w-[72px] truncate">
+                  {getShortUserAlias(user)}
+                </span>
+              </div>
+              <button
+                onClick={() => signOut(auth)}
+                title={`登出 (${user.email || ''})`}
+                className="p-2 text-slate-500 hover:text-slate-300 bg-slate-900 border border-slate-800/80 rounded-xl transition-colors"
+              >
+                <LogOut size={15} />
+              </button>
+            </div>
           </div>
         </header>
 
