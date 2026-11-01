@@ -263,13 +263,13 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto pb-24 bg-slate-950">
+        <main className="flex-1 min-h-0 overflow-y-auto bg-slate-950">
           {activeTab === 'learn' && <LearnView categories={categories} cards={cards} />}
           {activeTab === 'quiz' && <QuizView categories={categories} cards={cards} updateCardMastery={updateCardMastery} resetProgress={resetProgress} />}
           {activeTab === 'admin' && <AdminView categories={categories} setCategories={setCustomCategories} cards={cards} user={user} />}
         </main>
 
-        <nav className="absolute bottom-0 w-full bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 pb-safe pt-2 px-4 pb-6 flex justify-around items-center z-20">
+        <nav className="shrink-0 w-full bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 pt-1.5 px-4 pb-4 flex justify-around items-center z-20">
           <NavButton icon={BookOpen} label="複習" isActive={activeTab === 'learn'} onClick={() => setActiveTab('learn')} />
           <NavButton icon={BrainCircuit} label="測驗" isActive={activeTab === 'quiz'} onClick={() => setActiveTab('quiz')} />
           <NavButton icon={Database} label="管理" isActive={activeTab === 'admin'} onClick={() => setActiveTab('admin')} />
@@ -319,10 +319,10 @@ function LearnView({ categories, cards }) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col min-h-full">
       <CategorySelector categories={categories} activeCategory={activeCategory} setActiveCategory={setActiveCategory} />
 
-      <div className="flex-1 flex flex-col justify-center items-center px-6 py-2 pb-8">
+      <div className="flex-1 flex flex-col justify-center items-center px-6 py-2 pb-6">
         {filteredCards.length > 0 ? (
           <>
             <div className="w-full flex justify-between items-center text-sm font-medium text-slate-500 mb-4 px-2">
@@ -450,7 +450,9 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
     if (quizMode !== 'mixed') {
       type = quizMode;
     } else {
-      if (targetCard.mastery === 1) {
+      if (targetCard.mastery === 0) {
+        type = Math.random() > 0.5 ? 'mc_meaning' : 'mc_term';
+      } else if (targetCard.mastery === 1) {
         const hasPhrases = targetCard.phrases && targetCard.phrases.length > 0;
         type = (hasPhrases && Math.random() > 0.5) ? 'mc_phrase' : 'spelling';
       }
@@ -466,6 +468,14 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
         .map(c => c.meaning);
       qData.options = shuffle([targetCard.meaning, ...wrongOptions]);
     } 
+    else if (type === 'mc_term') {
+      const wrongOptions = cards
+        .filter(c => c.id !== targetCard.id)
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 3)
+        .map(c => c.term);
+      qData.options = shuffle([targetCard.term, ...wrongOptions]);
+    }
     else if (type === 'mc_phrase') {
       const correctPhrase = targetCard.phrases[Math.floor(Math.random() * targetCard.phrases.length)];
       qData.targetPhrase = correctPhrase;
@@ -507,11 +517,16 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
     
     let isCorrect = false;
     if (question.type === 'mc_meaning') isCorrect = (answer === question.card.meaning);
+    if (question.type === 'mc_term') isCorrect = (answer === question.card.term);
     if (question.type === 'mc_phrase') isCorrect = (answer === question.targetPhrase.en);
     if (question.type === 'spelling') isCorrect = (inputVal.trim().toLowerCase() === question.card.term.toLowerCase());
 
     setFeedback(isCorrect ? 'correct' : 'wrong');
     setShowAnswer(true);
+
+    if (question.type === 'mc_term') {
+      playAudio(question.card.term);
+    }
 
     if (isCorrect) {
       setTimeout(() => {
@@ -531,15 +546,16 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col min-h-full pb-6">
       <CategorySelector categories={categories} activeCategory={activeCategory} setActiveCategory={setActiveCategory} />
       
       {/* Quiz Mode Selector */}
-      <div className="px-6 py-2 shrink-0">
+      <div className="px-6 py-1.5 shrink-0">
         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
           {[
             { id: 'mixed', label: '🧠 智能綜合' },
-            { id: 'mc_meaning', label: '🎯 字義選擇' },
+            { id: 'mc_meaning', label: '🎯 英選中' },
+            { id: 'mc_term', label: '🔤 中選英' },
             { id: 'mc_phrase', label: '🧩 片語選擇' },
             { id: 'spelling', label: '📝 拼字測驗' }
           ].map(mode => (
@@ -558,8 +574,8 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
         </div>
       </div>
 
-      <div className="px-6 py-1">
-        <div className="flex justify-between text-xs font-bold text-slate-500 mb-2">
+      <div className="px-6 py-1 shrink-0">
+        <div className="flex justify-between text-xs font-bold text-slate-500 mb-1.5">
           <span>學習進度</span>
           <span className="text-indigo-400">{progressPercent}%</span>
         </div>
@@ -571,9 +587,9 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
         </div>
       </div>
 
-      <div className="px-6 py-4 flex-1 flex flex-col">
+      <div className="px-6 py-3 flex-1 flex flex-col">
         {!question ? (
-           <div className="flex-1 flex flex-col items-center justify-center text-center">
+           <div className="flex-1 flex flex-col items-center justify-center text-center py-8">
             <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mb-4 border border-green-500/30">
               <Check size={40} className="text-green-400" />
             </div>
@@ -594,51 +610,82 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
           <div className="flex-1 flex flex-col max-w-sm w-full mx-auto">
             
             {/* Question Card */}
-            <div className={`bg-slate-900 border ${feedback === 'correct' ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.2)]' : feedback === 'wrong' ? 'border-red-500/50 animate-shake' : 'border-slate-800'} rounded-[2rem] p-6 shadow-xl mb-6 transition-all`}>
+            <div className={`bg-slate-900 border ${feedback === 'correct' ? 'border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.2)]' : feedback === 'wrong' ? 'border-red-500/50 animate-shake' : 'border-slate-800'} rounded-[1.75rem] p-5 shadow-xl mb-4 transition-all`}>
               
-              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 flex justify-between items-center">
-                <span>{question.type === 'spelling' ? '📝 拼字測驗' : question.type === 'mc_phrase' ? '🧩 片語測驗' : '🎯 字義測驗'}</span>
+              <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex justify-between items-center">
+                <span>
+                  {question.type === 'spelling'
+                    ? '📝 拼字測驗'
+                    : question.type === 'mc_phrase'
+                    ? '🧩 片語測驗'
+                    : question.type === 'mc_term'
+                    ? '🔤 中選英測驗'
+                    : '🎯 英選中測驗'}
+                </span>
                 {feedback === 'wrong' && <span className="text-red-400">需複習</span>}
               </div>
 
               {question.type === 'mc_meaning' && (
-                <div className="text-center py-4">
-                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-sm font-bold mb-3">{question.card.pos}</span>
-                  <div className="flex justify-center items-center gap-3 mb-2">
+                <div className="text-center py-2">
+                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-sm font-bold mb-2">{question.card.pos}</span>
+                  <div className="flex justify-center items-center gap-3 mb-1">
                     <h2 className="text-3xl font-extrabold text-slate-50">{question.card.term}</h2>
                     <button 
                       onClick={() => playAudio(question.card.term)} 
                       className="p-2 bg-indigo-500/10 text-indigo-400 rounded-full hover:bg-indigo-500/30 transition-colors active:scale-95"
                     >
-                      <Volume2 size={24} />
+                      <Volume2 size={22} />
                     </button>
                   </div>
-                  <p className="text-indigo-400 font-mono">{question.card.phonetic}</p>
+                  <p className="text-indigo-400 font-mono text-sm">{question.card.phonetic}</p>
+                </div>
+              )}
+
+              {question.type === 'mc_term' && (
+                <div className="text-center py-2">
+                  <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-sm font-bold mb-2">{question.card.pos}</span>
+                  <h2 className="text-2xl font-bold text-slate-100 leading-snug mb-1">{question.card.meaning}</h2>
+                  {showAnswer && (
+                    <div className="flex justify-center items-center gap-2 mt-2 text-indigo-400">
+                      <span className="font-mono text-sm">{question.card.phonetic}</span>
+                      <button
+                        onClick={() => playAudio(question.card.term)}
+                        className="p-1.5 bg-indigo-500/10 rounded-full hover:bg-indigo-500/30"
+                      >
+                        <Volume2 size={18} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
               {question.type === 'mc_phrase' && (
-                <div className="text-center py-4">
+                <div className="text-center py-2">
                    <h2 className="text-xl font-bold text-slate-100 leading-snug">{question.targetPhrase.ch}</h2>
                 </div>
               )}
 
               {question.type === 'spelling' && (
-                <div className="text-center py-4">
+                <div className="text-center py-2">
                   <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 text-sm font-bold mb-2">{question.card.pos}</span>
-                  <h2 className="text-2xl font-bold text-slate-100 mb-2">{question.card.meaning}</h2>
-                  <p className="text-slate-500 font-mono">{question.card.phonetic}</p>
+                  <h2 className="text-2xl font-bold text-slate-100 mb-1">{question.card.meaning}</h2>
+                  <p className="text-slate-500 font-mono text-sm">{question.card.phonetic}</p>
                 </div>
               )}
             </div>
 
             {/* Answer Area */}
-            <div className="flex-1 flex flex-col gap-3">
-              {(question.type === 'mc_meaning' || question.type === 'mc_phrase') && question.options.map((opt, idx) => {
+            <div className="flex flex-col gap-2.5">
+              {(question.type === 'mc_meaning' || question.type === 'mc_term' || question.type === 'mc_phrase') && question.options.map((opt, idx) => {
                 let btnClass = "bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700";
                 
                 if (showAnswer) {
-                  const isCorrectAnswer = question.type === 'mc_meaning' ? opt === question.card.meaning : opt === question.targetPhrase.en;
+                  const isCorrectAnswer =
+                    question.type === 'mc_meaning'
+                      ? opt === question.card.meaning
+                      : question.type === 'mc_term'
+                      ? opt === question.card.term
+                      : opt === question.targetPhrase.en;
                   if (isCorrectAnswer) {
                     btnClass = "bg-green-500/20 border-green-500 text-green-400 font-bold";
                   } else if (feedback === 'wrong') {
@@ -651,7 +698,7 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
                     key={idx}
                     disabled={showAnswer}
                     onClick={() => handleAnswer(opt)}
-                    className={`w-full p-4 rounded-2xl border text-left font-medium transition-all active:scale-[0.98] ${btnClass}`}
+                    className={`w-full p-3.5 rounded-2xl border text-left font-medium transition-all active:scale-[0.98] ${btnClass}`}
                   >
                     {opt}
                   </button>
@@ -675,8 +722,8 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
                       }`}
                     />
                     {showAnswer && feedback === 'wrong' && (
-                      <div className="absolute -bottom-10 left-0 right-0 text-center text-green-400 font-bold tracking-widest text-lg">
-                        {question.card.term}
+                      <div className="mt-3 text-center text-green-400 font-bold tracking-widest text-lg">
+                        正解：{question.card.term}
                       </div>
                     )}
                   </div>
@@ -694,7 +741,7 @@ function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
                   onClick={() => {
                     setQuestion(null); // Generate next
                   }}
-                  className="mt-auto py-4 bg-slate-800 text-white font-bold rounded-2xl flex items-center justify-center gap-2 active:scale-95 transition-all border border-slate-700"
+                  className="mt-2 py-3.5 bg-slate-800 text-white font-bold rounded-2xl flex items-center justify-center gap-2 active:scale-95 transition-all border border-slate-700"
                 >
                   繼續 <ArrowRight size={20} />
                 </button>
