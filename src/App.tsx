@@ -165,19 +165,85 @@ const sortCardsByOrder = (list) => {
 export default function App() {
   const [activeTab, setActiveTab] = useState('learn'); // 'learn', 'quiz', 'admin'
   const [customCategories, setCustomCategories] = useState(INITIAL_CATEGORIES);
+  const [recentCategories, setRecentCategories] = useState(() => {
+    try {
+      const saved = localStorage.getItem('vocab_recent_categories');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activeCategory, setActiveCategoryState] = useState(() => {
+    try {
+      return localStorage.getItem('vocab_last_active_category') || 'All';
+    } catch {
+      return 'All';
+    }
+  });
+  const [selectedMultiCats, setSelectedMultiCats] = useState([]);
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
   const [cards, setCards] = useState([]);
   const [user, setUser] = useState(null);
   const [isSyncing, setIsSyncing] = useState(true);
   const [authReady, setAuthReady] = useState(false);
 
-  // 自動整合預設分類、自訂分類與雲端單字卡中的所有分類
+  // 自動整合預設分類、自訂分類與雲端單字卡中的所有分類，並依「最近使用順序 (recentCategories)」排在最前面
   const categories = useMemo(() => {
     const set = new Set([...customCategories]);
     cards.forEach(c => {
       if (c.category && c.category.trim()) set.add(c.category.trim());
     });
-    return Array.from(set);
-  }, [cards, customCategories]);
+    const all = Array.from(set);
+    return all.sort((a, b) => {
+      const idxA = recentCategories.indexOf(a);
+      const idxB = recentCategories.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return 0;
+    });
+  }, [cards, customCategories, recentCategories]);
+
+  // 記錄最後使用的科目，將它排到選單最前面，並同步到 localStorage 與雲端
+  const touchCategory = useCallback(
+    (cat, alsoSetActive = true) => {
+      if (!cat) return;
+      if (alsoSetActive) {
+        setActiveCategoryState(cat);
+        try {
+          localStorage.setItem('vocab_last_active_category', cat);
+        } catch {}
+      }
+
+      if (cat !== 'All' && cat !== '錯題本') {
+        setRecentCategories(prev => {
+          const next = [cat, ...prev.filter(c => c !== cat)];
+          try {
+            localStorage.setItem('vocab_recent_categories', JSON.stringify(next));
+          } catch {}
+          if (user) {
+            setDoc(
+              doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'prefs'),
+              {
+                recentCategories: next,
+                lastActiveCategory: alsoSetActive ? cat : activeCategory,
+              },
+              { merge: true }
+            ).catch(() => {});
+          }
+          return next;
+        });
+      } else if (alsoSetActive && user) {
+        setDoc(
+          doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'prefs'),
+          { lastActiveCategory: cat },
+          { merge: true }
+        ).catch(() => {});
+      }
+    },
+    [user, activeCategory]
+  );
 
   // 1. Auth Setup (Google)
   useEffect(() => {
@@ -188,6 +254,34 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // 1.5 Sync User Preferences (最近使用的科目排序)
+  useEffect(() => {
+    if (!user) return;
+    const prefsRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'prefs');
+    const unsub = onSnapshot(
+      prefsRef,
+      snap => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (Array.isArray(data.recentCategories) && data.recentCategories.length > 0) {
+            setRecentCategories(data.recentCategories);
+            try {
+              localStorage.setItem('vocab_recent_categories', JSON.stringify(data.recentCategories));
+            } catch {}
+          }
+          if (data.lastActiveCategory) {
+            setActiveCategoryState(data.lastActiveCategory);
+            try {
+              localStorage.setItem('vocab_last_active_category', data.lastActiveCategory);
+            } catch {}
+          }
+        }
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [user]);
 
   // 2. Data Sync
   useEffect(() => {
@@ -310,9 +404,45 @@ export default function App() {
         </header>
 
         <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-slate-950">
-          {activeTab === 'learn' && <LearnView categories={categories} cards={cards} />}
-          {activeTab === 'quiz' && <QuizView categories={categories} cards={cards} updateCardMastery={updateCardMastery} resetProgress={resetProgress} />}
-          {activeTab === 'admin' && <AdminView categories={categories} setCategories={setCustomCategories} cards={cards} user={user} />}
+          {activeTab === 'learn' && (
+            <LearnView
+              categories={categories}
+              cards={cards}
+              activeCategory={activeCategory}
+              setActiveCategory={cat => touchCategory(cat, true)}
+              selectedMultiCats={selectedMultiCats}
+              setSelectedMultiCats={setSelectedMultiCats}
+              rangeStart={rangeStart}
+              setRangeStart={setRangeStart}
+              rangeEnd={rangeEnd}
+              setRangeEnd={setRangeEnd}
+            />
+          )}
+          {activeTab === 'quiz' && (
+            <QuizView
+              categories={categories}
+              cards={cards}
+              activeCategory={activeCategory}
+              setActiveCategory={cat => touchCategory(cat, true)}
+              selectedMultiCats={selectedMultiCats}
+              setSelectedMultiCats={setSelectedMultiCats}
+              rangeStart={rangeStart}
+              setRangeStart={setRangeStart}
+              rangeEnd={rangeEnd}
+              setRangeEnd={setRangeEnd}
+              updateCardMastery={updateCardMastery}
+              resetProgress={resetProgress}
+            />
+          )}
+          {activeTab === 'admin' && (
+            <AdminView
+              categories={categories}
+              setCategories={setCustomCategories}
+              touchCategory={touchCategory}
+              cards={cards}
+              user={user}
+            />
+          )}
         </main>
 
         <nav className="shrink-0 w-full bg-slate-900/95 backdrop-blur-lg border-t border-slate-800 pt-1 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex justify-around items-center z-20">
@@ -368,11 +498,18 @@ function useScopedCards(cards, activeCategory, selectedMultiCats, rangeStart, ra
 
 // --- LEARN VIEW COMPONENTS ---
 
-function LearnView({ categories, cards }) {
-  const [activeCategory, setActiveCategory] = useState('All');
-  const [selectedMultiCats, setSelectedMultiCats] = useState([]);
-  const [rangeStart, setRangeStart] = useState('');
-  const [rangeEnd, setRangeEnd] = useState('');
+function LearnView({
+  categories,
+  cards,
+  activeCategory,
+  setActiveCategory,
+  selectedMultiCats,
+  setSelectedMultiCats,
+  rangeStart,
+  setRangeStart,
+  rangeEnd,
+  setRangeEnd,
+}) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
 
@@ -510,12 +647,20 @@ function LearnView({ categories, cards }) {
 
 // --- QUIZ ENGINE COMPONENTS ---
 
-function QuizView({ categories, cards, updateCardMastery, resetProgress }) {
-  const [activeCategory, setActiveCategory] = useState('All');
-  const [selectedMultiCats, setSelectedMultiCats] = useState([]);
-  const [rangeStart, setRangeStart] = useState('');
-  const [rangeEnd, setRangeEnd] = useState('');
-  
+function QuizView({
+  categories,
+  cards,
+  activeCategory,
+  setActiveCategory,
+  selectedMultiCats,
+  setSelectedMultiCats,
+  rangeStart,
+  setRangeStart,
+  rangeEnd,
+  setRangeEnd,
+  updateCardMastery,
+  resetProgress,
+}) {
   // Quiz State
   const [question, setQuestion] = useState(null);
   const [inputVal, setInputVal] = useState('');
@@ -1125,7 +1270,7 @@ function EmptyState({ isMistakeTab }) {
 
 // --- ADMIN VIEW COMPONENTS ---
 
-function AdminView({ categories, setCategories, cards, user }) {
+function AdminView({ categories, setCategories, touchCategory, cards, user }) {
   const [adminSubTab, setAdminSubTab] = useState('single'); // 'single' | 'batch' | 'categories'
   const [editingId, setEditingId] = useState(null);
 
@@ -1235,6 +1380,7 @@ function AdminView({ categories, setCategories, cards, user }) {
 
     try {
       await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'cards', cardId), cardData);
+      if (touchCategory) touchCategory(selectedCat.trim(), true);
       resetForm();
     } catch (error) {
       console.error('Error saving card: ', error);
@@ -1259,6 +1405,7 @@ function AdminView({ categories, setCategories, cards, user }) {
     setCategories(prev => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
     setSelectedCat(trimmed);
     setBatchCategory(trimmed);
+    if (touchCategory) touchCategory(trimmed, true);
     setNewCatName('');
     showCatNotice(`✅ 已新增科目「${trimmed}」`);
   };
@@ -1525,6 +1672,7 @@ function AdminView({ categories, setCategories, cards, user }) {
         await batch.commit();
       }
 
+      if (touchCategory) touchCategory(batchCategory, true);
       setBatchText('');
       setBatchStatus(`✅ 成功匯入 ${parsedCards.length} 個單字！`);
       setTimeout(() => setBatchStatus(''), 4000);
